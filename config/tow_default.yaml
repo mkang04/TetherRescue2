@@ -1,0 +1,118 @@
+# AirwayTow 기본 설정값 (v0.1)
+# 숫자를 바꿀 땐 코드가 아니라 이 파일을 고칩니다.
+# 단위: m, kg, s, N, rad
+
+sim:
+  physics_hz: 250        # 물리 계산 박자
+  control_hz: 50         # 조종·기록 박자
+  max_time: 120.0        # 에피소드 최대 길이 [s]
+  goal_distance: 50.0    # 사람(몸통)이 출발점에서 이만큼 +x로 오면 구조 성공 [m]
+  seed: 0
+  settle_time: 2.0       # 시작 전 물 위에 자리 잡는 시간 [s] (기록·평가 제외)
+
+ocean:
+  rho: 1025.0            # 바닷물 밀도 [kg/m^3]
+  g: 9.81
+  wave_height: 1.0       # 유의파고 Hs [m]  (0이면 잔잔한 물)
+  peak_period: 5.0       # 대표 주기 [s]
+  n_components: 8        # 겹치는 물결 개수
+  direction: 0.0         # 주 파향 [rad] (0 = +x 방향으로 진행)
+  spread: 0.5            # 파향 퍼짐 [rad]
+  current: [0.0, 0.0]    # 해류 [m/s] (x, y)
+
+robot:                   # 구조 로봇 (소형 무인 구조정)
+  length: 1.4
+  width: 0.6
+  height: 0.3
+  mass: 28.0
+  max_thrust: 300.0      # 최대 추진력 [N]
+  max_reverse: 0.3       # 후진은 최대 추진력의 30%까지
+  thrust_tau: 0.4        # 엔진 반응 지연 (1차 지연 시정수) [s]
+  max_rudder: 0.6        # 최대 조향각 [rad]
+  # 물 저항 (몸체 좌표계 x=앞뒤, y=좌우, z=위아래)
+  drag_lin: [5.0, 60.0, 400.0]     # 선형 [N/(m/s)]
+  drag_quad: [12.0, 150.0, 200.0]  # 2차 [N/(m/s)^2]
+  ang_drag: [8.0, 8.0, 6.0]        # 회전 감쇠 [N·m/(rad/s)]
+  blocks: [6, 3, 3]                # 부력 블록 분할 개수 (x, y, z)
+  tow_point: [-0.7, 0.0, 0.1]      # 줄 묶는 곳 (선미, 몸체 좌표)
+
+human:                   # 익수자: 머리 + 몸통 두 덩어리, 등을 대고 누운 자세
+  torso_size: [1.5, 0.38, 0.14]    # 몸통(다리 포함) 박스 전체 크기
+  torso_mass: 65.0
+  head_radius: 0.11
+  head_mass: 5.0
+  neck_stiffness: 60.0   # 목 관절 강성 [N·m/rad]
+  neck_damping: 6.0
+  neck_range: 0.6        # 목이 젖혀지는 최대 각 [rad]
+  drag_lin: [20.0, 40.0, 120.0]
+  drag_quad: [60.0, 200.0, 300.0]
+  head_drag_quad: 15.0
+  ang_drag: [15.0, 25.0, 15.0]
+  blocks: [8, 3, 3]
+  harness_point: [0.6, 0.0, 0.07]  # 줄 묶는 곳 (가슴 위, 몸통 좌표)
+  mouth_offset: [0.02, 0.0, 0.10]  # 입 위치 (머리 중심 기준)
+  # 앞으로 끌려갈 때 머리 앞에 물이 쌓이는 효과 (선수파).
+  # 입 앞 수위 상승 = bow_wave_coef * v^2 / (2g)
+  bow_wave_coef: 0.6
+  start_gap: 0.3         # 시작할 때 줄이 남는 길이 [m]
+
+tether:                  # 줄
+  rest_length: 3.0       # 자연 길이 [m]
+  stiffness: 600.0       # 팽팽할 때 고무줄 강성 [N/m] (구조용 완충 줄)
+  damping: 30.0          # 늘어나는 중일 때만 걸리는 감쇠 [N/(m/s)]
+  break_force: 294.0     # 이 힘을 넘으면 끊어짐 [N] (약 30kg 무게)
+  break_hold: 0.05       # 이 시간[s] 동안 계속 넘어야 끊어짐 (순간 튐 방지)
+
+pid:                     # 끌고 오기 속도 조종 (PID)
+  target_speed: 1.0      # 목표 속도 [m/s]
+  ramp_time: 6.0         # 목표 속도까지 천천히 올리는 시간 [s]
+  speed_kp: 0.8
+  speed_ki: 0.3
+  speed_kd: 0.0
+  heading_kp: 1.5
+  heading_ki: 0.0
+  heading_kd: 0.4
+
+# ---------------------------------------------------------------------------
+# 전체 구조 임무 (두 단계 유도)
+#   1) 멀리서: 사람이 찍어 준 좌표로 GPS 웨이포인트 주행 (GPS 정확도 수 m)
+#   2) 가까이서: 열화상·소나로 직접 감지해서 마무리 접근 → 줄 연결 → 기지로 견인
+mission:
+  base: [0.0, 0.0]         # 기지(출발·귀환) 위치 [m]
+  victim_distance: 32.0    # 익수자까지 평균 거리 [m] (시드마다 ±20% 무작위)
+  victim_bearing: 35.0     # 익수자 방향 범위 ±[도] (+x 기준)
+  auto_report: false       # true면 클릭 없이 '목격 지점'을 자동으로 목표로 보냄
+  report_error: 5.0        # 목격 지점 오차 (표준편차) [m] — 지도에 원으로 표시
+  gps_error: 2.5           # 로봇 GPS 오차 (표준편차) [m]
+  gps_tau: 30.0            # GPS 오차가 천천히 바뀌는 시간 [s]
+  transit_speed: 1.5       # 좌표로 이동할 때 속도 [m/s]
+  arrive_radius: 4.0       # 웨이포인트 도착 판정 거리 [m] (GPS 오차보다 크게)
+  search_leg: 5.0          # 도착 후 못 찾으면 사각 나선 탐색, 한 변씩 늘어나는 길이 [m]
+  search_speed: 0.9        # 탐색 속도 [m/s] (느릴수록 센서가 잘 봄)
+  search_timeout: 90.0     # 이 시간 동안 못 찾으면 실패 [s]
+  approach_speed_max: 1.0  # 마무리 접근 최대 속도 [m/s]
+  capture_distance: 2.0    # 로봇 중심과 사람 가슴 사이가 이 거리 안이면 줄 연결 [m]
+  capture_speed: 0.6       # 이 속도보다 느릴 때만 연결 (부딪힘 방지) [m/s]
+  track_lost_time: 8.0     # 이 시간 동안 감지가 없으면 '놓침' → 다시 탐색 [s]
+  home_radius: 5.0         # 사람이 기지에서 이 거리 안에 오면 구조 완료 [m]
+  max_time: 300.0          # 임무 최대 시간 [s]
+
+thermal:                   # 가상 열화상 카메라 (뱃머리, 앞쪽만 봄)
+  range: 20.0              # 최대 거리 [m]
+  fov: 60.0                # 시야각 [도]
+  rate: 10.0               # 초당 판단 횟수
+  bearing_noise: 1.5       # 방향 오차 [도]. 거리는 모름. 머리가 물에 잠기면 안 보임
+
+sonar:                     # 가상 소나 (물속 몸통 감지, 거리+방향)
+  range: 25.0
+  fov: 120.0
+  rate: 2.0
+  range_noise: 0.3         # [m]
+  bearing_noise: 3.0       # [도]
+  false_rate: 0.3          # 핑 1번당 가짜 탐지 평균 개수 (파고 1m 기준, 파고에 비례)
+
+ros_bridge:                # ROS2 브리지(rviz2)와 UDP로 주고받기
+  host: auto               # auto = Windows에서는 WSL 주소 자동 찾기, 그 외는 127.0.0.1
+  port: 47800
+  rate: 10.0               # 상태 보내는 횟수 [Hz]
+  wsl_distro: Ubuntu-24.04
