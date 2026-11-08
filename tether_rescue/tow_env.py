@@ -268,6 +268,7 @@ class TowSim:
             "tension": self.last_tension,
             "acc_x": float(acc[0]), "acc_y": float(acc[1]), "acc_z": float(acc[2]),
             "throttle": self.throttle, "rudder": self.rudder,
+            "thrust_level": self.thrust_level,   # 실제 엔진 세기 (최대 추진력 대비 비율)
             "gyro_x": float(gyro[0]), "gyro_y": float(gyro[1]), "gyro_z": float(gyro[2]),
             "yaw_rate": yaw_rate,
             "robot_speed": robot_speed, "human_speed": human_speed, "target_speed": float("nan"),

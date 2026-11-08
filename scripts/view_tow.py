@@ -535,7 +535,9 @@ def main():
                 rows += [("distance", f"{obs['progress']:.1f} / {cfg.sim.goal_distance:.0f} m")]
             rows += [("", ""), ("tow speed set", f"{cfg.pid.target_speed:.1f} m/s"),
                      ("robot speed", f"{obs['robot_speed']:.2f} m/s"),
-                     ("human speed", f"{obs['human_speed']:.2f} m/s"), ("", ""),
+                     ("human speed", f"{obs['human_speed']:.2f} m/s"),
+                     ("thrust", f"{obs['thrust_level'] * 100:+.0f}% of max  "
+                                f"({obs['thrust_level'] * cfg.robot.max_thrust:+.0f} N)"), ("", ""),
                      ("tether", ("not attached" if not sim.tether.attached else
                                  "BROKEN" if obs["tether_broken"] else
                                  f"{obs['tension']:.0f} N  ({ratio * 100:.0f}% of break)")),
