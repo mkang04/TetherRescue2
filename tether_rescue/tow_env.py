@@ -19,10 +19,11 @@ import mujoco
 import numpy as np
 
 from .config import TowConfig
+from .handoff import TubeHandoff
 from .ocean.hydro import HydroSpec, HydroSystem, box_blocks, sphere_blocks
 from .ocean.waves import WaveField
 from .scene import (WATER_CENTER_X, WATER_ELEV, WATER_HALF_X, WATER_HALF_Y, WATER_NCOL,
-                    WATER_NROW, build_mjcf, set_tube_visibility)
+                    WATER_NROW, build_mjcf)
 from .tow.tether import Tether
 
 CAPSIZE_ANGLE = math.radians(60.0)
@@ -102,6 +103,7 @@ class TowSim:
         self.tether = Tether(cfg.tether)
         self.waves = WaveField(oc, cfg.sim.seed)
         self._v6 = np.zeros(6)
+        self.handoff = TubeHandoff(self)
         self.reset()
 
     # ------------------------------------------------------------------ 준비
@@ -114,6 +116,7 @@ class TowSim:
         mujoco.mj_forward(self.model, self.data)
         self.tether.reset()
         self._before_settle()
+        self.handoff.reset(worn=self.tether.attached)   # 끌고 오기만: 처음부터 튜브 착용
         mujoco.mj_forward(self.model, self.data)
         self.throttle = 0.0
         self.thrust_level = 0.0   # 실제 엔진 세기 (throttle을 늦게 따라감)
@@ -134,8 +137,8 @@ class TowSim:
         return self._last_obs
 
     def update_visuals(self):
-        """구명튜브 위치 표시 (줄 연결 전: 갑판 위 / 후: 사람 가슴). 물리에는 영향 없음."""
-        set_tube_visibility(self.model, self.tether.attached)
+        """구명튜브·팔 모양 표시 (갑판 위 / 건네는 중 / 사람 가슴). 물리에는 영향 없음."""
+        self.handoff.apply_visuals()
 
     def _before_settle(self):
         """자리 잡기 전에 몸 위치를 바꾸고 싶을 때 하위 클래스에서 덮어씁니다 (구조 임무 등)."""
@@ -233,6 +236,7 @@ class TowSim:
         obs = self._observe()
         obs["tension_peak"] = peak
         obs["target_speed"] = target_speed
+        self.update_visuals()
         self.log.append(obs)
         self._check_done(obs)
         self._last_obs = obs

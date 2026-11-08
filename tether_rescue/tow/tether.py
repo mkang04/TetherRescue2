@@ -34,12 +34,16 @@ class Tether:
         self.broken = False
         self.attached = attached
         self._over_time = 0.0
+        self.rest = self.cfg.rest_length      # 지금 풀려 있는 줄 길이 (보통 = 자연 길이)
         self.state = TetherState()
 
-    def attach(self):
+    def attach(self, length: float | None = None):
+        """length: 연결 순간 두 묶음점 거리. 자연 길이보다 멀면 그만큼 줄을 풀어 둔 채 연결하고
+        reel_speed로 천천히 감아 들임 (연결하자마자 확 당겨져 끊어지는 것 방지)."""
         self.attached = True
         self.broken = False
         self._over_time = 0.0
+        self.rest = self.cfg.rest_length if length is None else max(self.cfg.rest_length, length + 0.1)
 
     def compute(self, p_robot, p_human, v_robot, v_human, dt: float) -> TetherState:
         """묶음점 위치·속도로 줄 힘을 계산합니다.
@@ -57,7 +61,9 @@ class Tether:
             self.state = TetherState(0.0, length, 0.0, False, True, u)
             return self.state
 
-        stretch = length - self.cfg.rest_length
+        if self.rest > self.cfg.rest_length:                 # 남은 줄 감기
+            self.rest = max(self.cfg.rest_length, self.rest - self.cfg.reel_speed * dt)
+        stretch = length - self.rest
         if stretch <= 0.0:
             self._over_time = 0.0
             self.state = TetherState(0.0, length, 0.0, False, False, u)

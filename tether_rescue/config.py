@@ -67,6 +67,10 @@ class HumanConfig:
     mouth_offset: list[float] = field(default_factory=lambda: [0.02, 0.0, 0.10])
     bow_wave_coef: float = 0.6
     start_gap: float = 0.3
+    arm_reach: float = 0.7        # 어깨에서 손끝까지 [m] (튜브를 잡을 수 있는 거리)
+    grab_reaction: float = 0.8    # 튜브가 손 닿는 곳에 이만큼 있어야 잡으려고 함 [s]
+    grab_time: float = 1.2        # 팔을 뻗어 잡는 데 걸리는 시간 [s]
+    don_time: float = 3.0         # 잡은 튜브를 가슴(겨드랑이 아래)에 끼우는 시간 [s]
 
 
 @dataclass
@@ -76,6 +80,7 @@ class TetherConfig:
     damping: float = 30.0
     break_force: float = 294.0
     break_hold: float = 0.05
+    reel_speed: float = 0.2       # 연결 때 더 풀려 있던 줄을 감아 들이는 빠르기 [m/s]
 
 
 @dataclass
@@ -92,7 +97,7 @@ class PIDConfig:
 
 @dataclass
 class MissionConfig:
-    """전체 구조 임무: 좌표 받기 → GPS로 이동 → 가까이서 직접 감지 → 줄 연결 → 기지로 견인."""
+    """전체 구조 임무: 좌표 받기 → GPS로 이동 → 가까이서 직접 감지 → 튜브 건네기 → 기지로 견인."""
     base: list[float] = field(default_factory=lambda: [0.0, 0.0])
     victim_distance: float = 32.0
     victim_bearing: float = 35.0
@@ -106,7 +111,10 @@ class MissionConfig:
     search_speed: float = 0.9
     search_timeout: float = 90.0
     approach_speed_max: float = 1.0
-    capture_distance: float = 2.0
+    handoff_standoff: float = 1.6      # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m]
+    handoff_min_standoff: float = 1.15  # 못 잡으면 이 거리까지 조금씩 다가감 [m]
+    handoff_creep: float = 0.05        # 다가가는 빠르기 [m/s]
+    handoff_timeout: float = 15.0     # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s]
     capture_speed: float = 0.6
     track_lost_time: float = 8.0
     home_radius: float = 5.0

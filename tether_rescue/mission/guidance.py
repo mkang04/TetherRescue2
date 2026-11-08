@@ -4,8 +4,10 @@
   WAIT_GOAL  목표 좌표를 기다림 (지도 클릭 / rviz2 "2D Goal Pose" / 자동 신고)
   TRANSIT    멀리서: GPS로 좌표까지 이동 (정확도 수 m)
   SEARCH     좌표에 왔는데 아직 못 찾음 → 사각 나선으로 돌며 탐색
-  APPROACH   가까이서: 열화상·소나로 직접 감지한 위치로 마무리 접근
-  TOW        줄 연결 완료 → 기지로 끌고 옴
+  APPROACH   가까이서: 열화상·소나로 직접 감지한 위치로 마무리 접근 (사람 앞에 멈출 거리까지)
+  HANDOFF    제자리에 서서 뱃머리 앞으로 튜브를 내밂 → 사람이 잡아서 끼울 때까지 기다림
+             (못 잡으면 조금씩 다가감, 너무 오래 걸리면 추정이 틀린 것으로 보고 다시 탐색)
+  TOW        튜브 착용 = 줄 연결 완료 → 기지로 끌고 옴
   DONE       끝
 
 로봇 두뇌가 쓰는 정보는 'GPS 위치(오차 있음), 나침반 방향, 속도, 센서 탐지'뿐입니다.
@@ -21,9 +23,10 @@ import numpy as np
 from ..config import MissionConfig
 from .sensors import Detection
 
-WAIT_GOAL, TRANSIT, SEARCH, APPROACH, TOW, DONE = "WAIT_GOAL", "TRANSIT", "SEARCH", "APPROACH", "TOW", "DONE"
+WAIT_GOAL, TRANSIT, SEARCH, APPROACH, HANDOFF, TOW, DONE = (
+    "WAIT_GOAL", "TRANSIT", "SEARCH", "APPROACH", "HANDOFF", "TOW", "DONE")
 PHASE_KO = {WAIT_GOAL: "좌표 기다림", TRANSIT: "좌표로 이동", SEARCH: "주변 탐색", APPROACH: "직접 감지 접근",
-            TOW: "견인", DONE: "끝"}
+            HANDOFF: "튜브 건네기", TOW: "견인", DONE: "끝"}
 
 
 def heading_to(src, dst) -> float:
@@ -142,7 +145,7 @@ def _wrap(a: float) -> float:
 class Command:
     speed_ref: float
     heading_ref: float
-    want_attach: bool = False
+    offer: bool = False          # True면 뱃머리 앞으로 튜브를 내밂
     hold: bool = False           # True면 제자리 (추진력 0)
 
 
@@ -164,7 +167,9 @@ class MissionController:
         self.arrive_t: float | None = None
         self.attach_t: float | None = None
         self.fail_reason: str | None = None
-        self.near_since: float | None = None
+        self.handoff_t: float | None = None      # 튜브 건네기 시작 시각
+        self.grabbed_t: float | None = None      # 사람이 튜브를 잡은 시각
+        self.standoff = self.cfg.handoff_standoff
         self.tracker.reset()
         self.tracker.lost_time = self.cfg.track_lost_time
 
@@ -179,9 +184,14 @@ class MissionController:
         self.tracker.gate_center = self.goal
         self.tracker.gate_radius = max(12.0, 3.0 * self.cfg.report_error + self.cfg.arrive_radius)
         self.search_path, self.search_idx, self.search_start = [], 0, None
-        if self.phase != APPROACH:
+        if self.phase not in (APPROACH, HANDOFF):
             self.phase = TRANSIT
         return True
+
+    def on_grabbed(self, t: float):
+        """사람이 튜브를 잡음 → 끼우는 동안 줄이 당겨지지 않게 가장 가까운 거리로 붙음."""
+        self.grabbed_t = t
+        self.standoff = self.cfg.handoff_min_standoff
 
     def on_attached(self, t: float):
         self.phase, self.attach_t = TOW, t
@@ -198,8 +208,9 @@ class MissionController:
 
         if self.phase in (TRANSIT, SEARCH) and self.tracker.confirmed:
             self.phase = APPROACH                       # 직접 감지가 되면 GPS보다 감지를 믿음
-        if self.phase == APPROACH and not self.tracker.confirmed:
-            self.phase = SEARCH                         # 놓쳤으면 마지막 추정 위치 주변을 다시 탐색
+        # 놓쳤으면 마지막 추정 위치 주변을 다시 탐색 (사람이 이미 튜브를 잡았으면 기다림)
+        if self.phase in (APPROACH, HANDOFF) and not self.tracker.confirmed and self.grabbed_t is None:
+            self.phase = SEARCH
             center = self.tracker.est if self.tracker.est is not None else self.goal
             self.search_path, self.search_idx = square_spiral(center, c.search_leg), 0
             self.search_start = t
@@ -233,26 +244,36 @@ class MissionController:
                 wp = self.search_path[self.search_idx]
             return Command(c.search_speed, heading_to(gps_xy, wp))
 
-        if self.phase == APPROACH:
+        if self.phase in (APPROACH, HANDOFF):
             est = self.tracker.est
             r = float(np.linalg.norm(est - gps_xy))
             hdg = heading_to(gps_xy, est)
             tb = self.tracker.recent_thermal(t, 0.5)
             if tb is not None and r < 8.0:              # 가까우면 방향은 열화상이 더 정확
                 hdg = tb
-            want = r < c.capture_distance + 1.0
-            v = float(np.clip(0.25 * (r - 1.0), 0.3, c.approach_speed_max))
-            if r < 1.5:
-                v = 0.0                                  # 너무 가까우면 멈춰서 부딪힘 방지
-            # 추정 위치에 왔는데 한참 연결이 안 되면 추정이 틀린 것 → 버리고 다시 탐색
-            if want:
-                self.near_since = t if self.near_since is None else self.near_since
-                if t - self.near_since > 8.0:
+
+            if self.phase == APPROACH:
+                self.standoff = c.handoff_standoff
+                gap = r - self.standoff                 # 사람 앞에 멈출 자리까지 남은 거리
+                v = float(np.clip(0.25 * gap + 0.2, 0.25, c.approach_speed_max))
+                if gap < 0.8:                           # 다 와 가면 천천히 세움
+                    v = float(np.clip(0.5 * gap, -0.2, 0.3))
+                if gap < 0.4 and abs(speed) < c.capture_speed:
+                    self.phase, self.handoff_t = HANDOFF, t
+                return Command(v, hdg)
+
+            # HANDOFF: 제자리에서 튜브를 내밀고 기다림
+            if self.grabbed_t is None:
+                waited = t - self.handoff_t
+                if waited > c.handoff_timeout:          # 한참 못 잡음 → 추정이 틀린 것 → 다시 탐색
                     self.tracker.drop()
-                    self.near_since = None
-            else:
-                self.near_since = None
-            return Command(v, hdg, want_attach=want)
+                    self.handoff_t = None
+                    return Command(0.0, yaw, hold=True)
+                if waited > 4.0:                        # 손이 안 닿는 듯 → 조금씩 다가감
+                    self.standoff = max(c.handoff_min_standoff,
+                                        c.handoff_standoff - c.handoff_creep * (waited - 4.0))
+            v = float(np.clip(0.6 * (r - self.standoff), -0.2, 0.3))
+            return Command(v, hdg, offer=True)
 
         if self.phase == TOW:
             d_home = float(np.linalg.norm(base - gps_xy))

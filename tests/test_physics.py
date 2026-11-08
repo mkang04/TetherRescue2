@@ -189,16 +189,72 @@ def test_visual_parts_do_not_affect_physics():
     assert m.body_inertia[sim.robot_id][0] == pytest.approx(r.mass * (r.width ** 2 + r.height ** 2) / 12)
 
 
-def test_rescue_tube_moves_from_deck_to_victim_on_attach():
+def test_rescue_tube_moves_from_deck_to_water_to_victim():
+    from tether_rescue.handoff import WORN
     from tether_rescue.mission.mission_sim import MissionSim
 
-    def alpha(sim, prefix):
-        return [sim.model.geom_rgba[i, 3] for i in range(sim.model.ngeom)
-                if sim.model.geom(i).name.startswith(prefix)]
+    def shown(sim, prefix):
+        a = [sim.model.geom_rgba[i, 3] for i in range(sim.model.ngeom) if sim.model.geom(i).name.startswith(prefix)]
+        assert a, prefix
+        return all(x == 1 for x in a) if a[0] == 1 else (False if any(x == 1 for x in a) else None)
 
     sim = MissionSim(flat_cfg(), mode="mission")
     sim.reset(0)
-    assert all(a == 1 for a in alpha(sim, "tube_robot_")) and all(a == 0 for a in alpha(sim, "tube_human_"))
-    sim.tether.attach()
+    assert shown(sim, "tube_robot_") and shown(sim, "tube_human_") is None and shown(sim, "tube_free_") is None
+    sim.handoff.offer()                                   # 뱃머리 앞 물 위로 내밂
     sim.update_visuals()
-    assert all(a == 0 for a in alpha(sim, "tube_robot_")) and all(a == 1 for a in alpha(sim, "tube_human_"))
+    assert shown(sim, "tube_free_") and shown(sim, "tube_robot_") is None and shown(sim, "tube_human_") is None
+    sim.handoff._go(WORN)                                 # 사람이 끼움
+    sim.update_visuals()
+    assert shown(sim, "tube_human_") and shown(sim, "tube_robot_") is None and shown(sim, "tube_free_") is None
+
+
+def test_victim_grabs_offered_tube_only_within_arm_reach(monkeypatch):
+    """튜브가 손 닿는 거리 안에 있어야 잡고, 잡은 뒤 끼우면 'worn'으로 줄 연결 신호."""
+    from tether_rescue.handoff import DONNING, OFFERED, TubeHandoff
+    from tether_rescue.mission.mission_sim import MissionSim
+
+    sim = MissionSim(flat_cfg(), mode="mission")
+    sim.reset(0)
+    h = sim.handoff
+    dt = 1.0 / sim.cfg.sim.control_hz
+    torso = sim.data.xpos[sim.torso_id].copy()
+    shoulder = torso + sim.data.xmat[sim.torso_id].reshape(3, 3) @ h.puppet.shape.shoulder[+1]
+    q = np.array([1.0, 0.0, 0.0, 0.0])
+
+    far = (shoulder + np.array([3.0, 0.0, 0.0]), q)
+    monkeypatch.setattr(TubeHandoff, "offered_pose", lambda self: far)   # 멀리 내밂 → 안 잡음
+    h.offer()
+    for _ in range(100):
+        assert h.update(dt, 0.0) is None
+    assert h.state == OFFERED
+
+    near = (shoulder + np.array([0.5, 0.0, 0.0]), q)       # 고리 가장자리가 어깨에서 약 0.2 m
+    monkeypatch.setattr(TubeHandoff, "offered_pose", lambda self: near)
+    events = []
+    for _ in range(int((sim.cfg.human.grab_reaction + sim.cfg.human.grab_time + 0.2) / dt)):
+        events.append(h.update(dt, 0.0))
+        sim.data.time += dt
+    assert "grabbed" in events and h.state == DONNING
+    for _ in range(int((sim.cfg.human.don_time + 0.2) / dt)):
+        events.append(h.update(dt, 0.0))
+        sim.data.time += dt
+    assert "worn" in events
+
+
+def test_tether_attached_beyond_rest_length_reels_in_without_snapping():
+    from tether_rescue.tow.tether import Tether
+
+    cfg = flat_cfg().tether
+    t = Tether(cfg)
+    t.reset(attached=False)
+    t.attach(cfg.rest_length + 0.6)                         # 0.6 m 더 멀 때 연결 (그냥이면 360 N → 끊어짐)
+    z = np.zeros(3)
+    p = np.array([cfg.rest_length + 0.6, 0.0, 0.0])
+    first = t.compute(z, p, z, z, 0.004)
+    assert first.tension == 0 and not first.broken
+    near = np.array([cfg.rest_length + 0.2, 0.0, 0.0])     # 로봇이 다가와서 거리가 줄어듦
+    for _ in range(int(0.8 / cfg.reel_speed / 0.004)):
+        s = t.compute(z, near, z, z, 0.004)
+    assert t.rest == pytest.approx(cfg.rest_length)        # 다 감으면 원래 자연 길이
+    assert s.tension == pytest.approx(cfg.stiffness * 0.2) and not s.broken

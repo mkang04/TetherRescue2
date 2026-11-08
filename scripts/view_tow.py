@@ -43,6 +43,7 @@ import numpy as np  # noqa: E402
 from tether_rescue.bridge.messages import build_state  # noqa: E402
 from tether_rescue.bridge.udp_link import SimLink  # noqa: E402
 from tether_rescue.config import load_config  # noqa: E402
+from tether_rescue.handoff import STATE_EN  # noqa: E402
 from tether_rescue.metrics import compute_metrics  # noqa: E402
 from tether_rescue.mission.mission_sim import MissionSim  # noqa: E402
 from tether_rescue.ui.control_panel import ControlPanel, set_cfg  # noqa: E402
@@ -62,7 +63,8 @@ SPEED_MIN, SPEED_MAX = 0.2, 3.0
 REASON_TEXT = {"success": "RESCUED", "tether_broken": "TETHER BROKEN", "capsized": "ROBOT CAPSIZED",
                "timeout": "TIMEOUT", "not_found": "VICTIM NOT FOUND"}
 PHASE_TEXT = {"WAIT_GOAL": "waiting for coordinate", "TRANSIT": "GPS transit to coordinate",
-              "SEARCH": "searching nearby", "APPROACH": "direct sensing approach", "TOW": "towing to base",
+              "SEARCH": "searching nearby", "APPROACH": "direct sensing approach",
+              "HANDOFF": "handing tube to victim", "TOW": "towing to base",
               "DONE": "done", "TOW_ONLY": "towing"}
 CAMERA_NAMES = {6: "follow human", 7: "follow robot", 8: "top view"}
 
@@ -528,7 +530,11 @@ def main():
                 panel.set_status(f"{run_ko}  ·  {obs['t']:.1f} s  ·  {prog}", ui["paused"])
             rows = [("STATE", f"{run_state}  ({play})"), ("time", f"{obs['t']:.1f} s")]
             if sim.mode == "mission":
+                tube = STATE_EN.get(obs.get("tube"), "")
+                if obs.get("tube") in ("OFFERED", "GRABBING"):
+                    tube += f"  (hand {obs['tube_reach']:.2f} / reach {cfg.human.arm_reach:.2f} m)"
                 rows += [("phase", PHASE_TEXT.get(phase, phase)),
+                         ("rescue tube", tube),
                          ("GPS error", f"{obs['gps_error']:.1f} m"),
                          ("victim to base", f"{obs['human_home_dist']:.1f} m")]
             else:

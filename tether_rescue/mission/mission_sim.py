@@ -1,6 +1,7 @@
 """전체 구조 임무 시뮬레이션.
 
-기지(0, 0)에서 출발 → 바다 어딘가의 익수자에게 좌표로 이동 → 직접 감지로 접근 → 줄 연결 → 기지로 견인.
+기지(0, 0)에서 출발 → 바다 어딘가의 익수자에게 좌표로 이동 → 직접 감지로 접근
+→ 손 닿는 곳에 튜브 건네기 → 사람이 잡아서 끼우면 줄 연결 → 기지로 견인.
 물리(파도·부력·저항·줄)는 TowSim을 그대로 씁니다. 처음에는 줄이 연결돼 있지 않습니다.
 
 사용 예
@@ -22,7 +23,7 @@ from ..config import TowConfig
 from ..tow.pid import TowPIDController
 from ..tow_env import CAPSIZE_ANGLE, LOG_FIELDS, Outcome, TowSim
 from .gps import GpsModel
-from .guidance import APPROACH, DONE, TOW, MissionController
+from .guidance import APPROACH, DONE, HANDOFF, MissionController
 from .sensors import Detection, Sonar, ThermalCamera
 
 
@@ -95,6 +96,7 @@ class MissionSim(TowSim):
         self.goal_received_t: float | None = None
         self.gps_err_arrival: float | None = None
         self.attach_t: float | None = None
+        self.grab_t: float | None = None
         self.command = None
         if mc.auto_report and self.mode == "mission":
             self.set_goal(self.sighting)
@@ -144,22 +146,29 @@ class MissionSim(TowSim):
                 and self.gps_err_arrival is None:
             self.gps_err_arrival = float(np.linalg.norm(self.gps.error))
 
-        # 줄 연결: 두뇌가 원하고 + 실제로 가깝고 + 충분히 느릴 때
-        if cmd.want_attach and not self.tether.attached:
-            d = float(np.linalg.norm(self.data.site_xpos[self.harness_site][:2] - robot_xy))
-            if d < self.cfg.mission.capture_distance and abs(self._last_obs["robot_speed"]) < \
-                    self.cfg.mission.capture_speed:
-                self.tether.attach()
-                self.update_visuals()
-                self.attach_t = t
-                self.brain.on_attached(t)
-                self.ctrl.reset()
+        # 튜브 건네기: 두뇌가 내밀라고 하면 뱃머리 앞에 내밂. 손이 닿는지는 실제 어깨 위치로 판정
+        if cmd.offer:
+            self.handoff.offer()
+        elif self.brain.phase != HANDOFF:
+            self.handoff.retract()                       # 건네기를 그만두면 (다시 탐색 등) 튜브 회수
+        event = self.handoff.update(dt, self._last_obs["robot_speed"])
+        if event == "grabbed":
+            self.grab_t = t
+            self.brain.on_grabbed(t)
+        elif event == "worn":                            # 가슴에 끼움 = 줄 연결
+            p_r, p_h = self.data.site_xpos[self.tow_site], self.data.site_xpos[self.harness_site]
+            self.tether.attach(float(np.linalg.norm(p_h - p_r)))
+            self.attach_t = t
+            self.brain.on_attached(t)
+            self.ctrl.reset()
 
         if cmd.hold:
             thr, rud = 0.0, 0.0
         else:
             thr, rud = self.ctrl.track(dt, cmd.speed_ref, cmd.heading_ref, self._last_obs["robot_speed"], yaw,
                                        self._last_obs["yaw_rate"])
+            if thr < 0:
+                rud = -rud           # 뒤로 밀 때는 추진기 꺾는 방향이 반대로 작용
         obs = self.step(thr, rud, target_speed=cmd.speed_ref)
         return obs
 
@@ -180,6 +189,8 @@ class MissionSim(TowSim):
             "track": None if (tr.est is None or not tr.confirmed) else tr.est.tolist(),
             "human_home_dist": float(np.linalg.norm(self._torso_xy() - base)),
             "attached": bool(self.tether.attached),
+            "tube": self.handoff.state,
+            "tube_reach": self.handoff.reach_dist,     # 가까운 어깨 ~ 튜브 [m] (건네는 중일 때)
         })
         return obs
 

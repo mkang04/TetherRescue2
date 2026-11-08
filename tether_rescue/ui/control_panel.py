@@ -69,7 +69,10 @@ PARAMS: list[Param] = [
           tip="좌표(GPS)로 갈 때 속도"),
     Param("mission.gps_error", "GPS 오차 (m)", 0.0, 8.0, 0.5, True, G_MISSION,
           tip="로봇이 아는 자기 위치의 오차. 지도에서 노란 원 = 로봇이 생각하는 자기 위치"),
-    Param("mission.capture_distance", "줄 연결 거리 (m)", 1.0, 4.0, 0.1, True, G_MISSION),
+    Param("mission.handoff_standoff", "튜브 건넬 거리 (m)", 1.2, 2.5, 0.05, True, G_MISSION,
+          tip="튜브를 건넬 때 로봇 중심 ~ 사람 거리. 튜브는 뱃머리 앞에 내밂"),
+    Param("human.arm_reach", "팔 닿는 거리 (m)", 0.4, 1.0, 0.05, True, G_MISSION,
+          tip="어깨에서 손끝까지. 튜브가 이 안에 오면 사람이 잡음"),
     Param("thermal.range", "열화상 거리 (m)", 5, 40, 1, True, G_SENSOR, tip="머리가 물 밖에 있어야 보임. 방향만 앎"),
     Param("thermal.fov", "열화상 시야각 (도)", 20, 120, 5, True, G_SENSOR),
     Param("sonar.range", "소나 거리 (m)", 5, 40, 1, True, G_SENSOR, tip="물속 몸통. 거리+방향. 가짜 탐지 있음"),
@@ -91,7 +94,7 @@ RESULT_COLS = [("no", "#", 30), ("mode", "모드", 44), ("seed", "시드", 40), 
 REASON_KO = {"success": "구조 성공", "tether_broken": "줄 끊어짐", "capsized": "로봇 뒤집힘", "timeout": "시간 초과",
              "not_found": "못 찾음"}
 PHASE_KO = {"WAIT_GOAL": "좌표 기다림", "TRANSIT": "좌표로 이동(GPS)", "SEARCH": "주변 탐색", "APPROACH": "직접 감지 접근",
-            "TOW": "견인", "DONE": "끝", "TOW_ONLY": "끌고 오기"}
+            "HANDOFF": "튜브 건네기", "TOW": "견인", "DONE": "끝", "TOW_ONLY": "끌고 오기"}
 
 # 지도 범위 (월드 m) — 물 표면 그림과 같은 범위
 MAP_X = (-20.0, 70.0)
