@@ -48,11 +48,15 @@ VS Code 터미널(PowerShell)에서는 `.\view_simulation.bat` 으로 실행합�
 
 - 버튼: 일시정지 / 적용하고 다시 시작 / 기본값 복원(설정 파일 값으로)
 - 보기: 재생 속도, 카메라, 자동 재시작, 그래프 켜기·끄기
-- 실험 결과 표: 판이 끝날 때마다 설정과 결과가 쌓입니다. **[결과 CSV 저장]** → `results/viewer_runs.csv`
+- 실험 결과: 판이 끝날 때마다(성공·실패 모두) **회차별로 자동 기록**됩니다 → `results/실험기록.csv`
+  - 한글 열 이름, 엑셀에서 바로 열림. 프로그램을 껐다 켜도 회차 번호가 이어지고 지난 기록도 표에 보입니다.
+  - 표: 성공 = 초록 줄, 실패 = 빨간 줄. 위에 전체 횟수·성공률 요약. [기록 파일 열기] 로 엑셀에서 열기.
+  - 파일이 엑셀에서 열려 있어 못 쓰면 기억해 뒀다가 다음 판 때 같이 씁니다.
   (`changed_mid_run=1` 은 그 판 도중에 값을 바꿨다는 뜻)
 - 마우스를 값 이름 위에 올리면 설명이 뜹니다.
 
 **오른쪽 — 3D 뷰어**: 왼쪽 위 = 현재 상태, 오른쪽 = 실시간 그래프(속도 / 줄 힘 / 입 높이, 최근 15초), 왼쪽 아래 = 단축키 안내.
+글자·그래프는 모두 한글입니다 (MuJoCo 기본 글꼴은 한글이 안 돼서 맑은 고딕으로 그린 그림을 얹음).
 한 판이 끝나면 결과가 위에 뜨고 3초 뒤 다음 시드로 다시 시작합니다. 둘 중 한 창을 닫으면 종료됩니다.
 패널 없이 뷰어만: `.\view_simulation.bat --no-panel` / 끌고 오기만으로 시작: `.\view_simulation.bat --mode tow`
 (모드는 패널 [구조 임무 · 지도] 탭에서도 바꿀 수 있고, [적용하고 다시 시작] 때 반영됩니다)
@@ -159,12 +163,14 @@ MuJoCo 뷰어 기본 단축키 중 쓸 만한 것: `1` 물 표면 숨기기/보�
 | `tether_rescue/metrics.py` | 성적: 얼굴 밖 비율, 평균 속도, 최대 줄 힘, 종합 점수 |
 | `scripts/` | 실행 스크립트 |
 | `tether_rescue/ui/control_panel.py` | 실험 설정 패널 (슬라이더, 지도, 결과 표) |
+| `tether_rescue/ui/overlay.py` | 뷰어 위 한글 글자·그래프 그리기 |
+| `tether_rescue/ui/run_log.py` | 회차별 실험 기록 (`results/실험기록.csv`) |
 | `tether_rescue/mission/` | 구조 임무: GPS 모델, 열화상·소나, 추적기·단계 판단, 임무 시뮬레이션 |
 | `tether_rescue/bridge/` | ROS2와 주고받는 메시지(JSON)·rviz2 마커 모양, UDP 연결 (ROS2 없이 동작) |
 | `ros2/tether_rescue_bridge.py` | WSL/우분투에서 도는 ROS2 노드 (rclpy) |
 | `config/rviz/tether_rescue.rviz` | rviz2 화면 설정 (위에서 보기, 2D Goal Pose 도구) |
 | `ros_bridge_wsl.bat`, `scripts/run_ros_bridge.sh` | 브리지 + rviz2 실행 |
-| `tests/` | 물리·패널·임무·통신·겉모양·튜브 건네기 검사 (40개) |
+| `tests/` | 물리·패널·임무·통신·겉모양·튜브 건네기·실험 기록 검사 (43개) |
 
 ## 모델 요약
 

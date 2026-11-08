@@ -3,21 +3,24 @@
 탭
 - 실험 값: 끌고 오기·바다·줄·PID 값 (바로 적용) + 다시 시작할 때 적용 값
 - 구조 임무 · 지도: 모드 선택, 지도(클릭 = 목표 좌표, rviz2 "2D Goal Pose"와 같은 역할), 임무·센서 값, ROS2 연결
-- 실험 결과: 판마다 설정과 결과 (CSV 저장)
+- 실험 결과: 판이 끝날 때마다 회차별로 자동 기록 (results/실험기록.csv), 성공 초록 · 실패 빨강
 
 "바로 적용" 값은 바꾸는 즉시 반영, "다시 시작할 때 적용" 값은 [적용하고 다시 시작] 을 눌러야 반영.
 이 패널은 메인 스레드에서 poll()을 자주 불러 주는 방식으로 동작합니다 (자체 mainloop 없음).
 """
 from __future__ import annotations
 
-import csv
 import math
+import os
+import subprocess
+import sys
 import tkinter as tk
 from dataclasses import dataclass
 from pathlib import Path
 from tkinter import ttk
 
 from ..config import TowConfig
+from .run_log import RunLog
 
 FONT = ("Malgun Gothic", 10)
 FONT_S = ("Malgun Gothic", 9)
@@ -88,11 +91,12 @@ PLAYBACK = [("4배 빠르게", 0.25), ("2배 빠르게", 0.5), ("실시간", 1.0
             ("2배 느리게", 2.0), ("4배 느리게", 4.0), ("8배 느리게", 8.0)]
 CAMERAS = [("사람", 6), ("로봇", 7), ("위에서", 8)]
 MODES = [("끌고 오기만", "tow"), ("전체 구조 임무 (좌표 → 탐지 → 견인)", "mission")]
-RESULT_COLS = [("no", "#", 30), ("mode", "모드", 44), ("seed", "시드", 40), ("speed", "견인속도", 60),
-               ("wave", "파고", 40), ("reason", "결과", 86), ("time", "시간 s", 54), ("airway", "얼굴밖 %", 62),
-               ("tension", "최대줄힘", 62), ("note", "비고", 150)]
-REASON_KO = {"success": "구조 성공", "tether_broken": "줄 끊어짐", "capsized": "로봇 뒤집힘", "timeout": "시간 초과",
-             "not_found": "못 찾음"}
+# 결과 표: (기록 열 이름, 표 제목, 너비). 기록 파일(run_log)의 한글 열을 그대로 보여 줌
+RESULT_COLS = [("회차", "회차", 40), ("시각", "시각", 64), ("모드", "모드", 66), ("결과", "결과", 78),
+               ("시드", "시드", 40), ("견인 목표 속도(m/s)", "견인속도", 58), ("파고(m)", "파고", 40),
+               ("걸린 시간(s)", "시간 s", 54), ("얼굴 물 밖 비율(%)", "얼굴밖 %", 62),
+               ("최대 줄 힘(N)", "최대줄힘", 62), ("비고", "비고", 190)]
+TABLE_MAX_ROWS = 300      # 표에는 최근 기록만 (파일에는 전부)
 PHASE_KO = {"WAIT_GOAL": "좌표 기다림", "TRANSIT": "좌표로 이동(GPS)", "SEARCH": "주변 탐색", "APPROACH": "직접 감지 접근",
             "HANDOFF": "튜브 건네기", "TOW": "견인", "DONE": "끝", "TOW_ONLY": "끌고 오기"}
 
@@ -121,7 +125,7 @@ class ControlPanel:
         self.changed: set[str] = set()      # 바뀐 '바로 적용' 값
         self.goal_requests: list[tuple[float, float]] = []   # 지도 클릭
         self._suspend = False
-        self.results: list[dict] = []
+        self.log = RunLog(self.results_dir)
         self.mode_applied = mode
 
         root = tk.Tk()
@@ -235,21 +239,29 @@ class ControlPanel:
                 frames[p.group].columnconfigure(1, weight=1)
             self._add_slider(frames[p.group], p)
 
-        # 결과 탭
+        # 결과 탭: 위 요약, 가운데 표, 아래 버튼
+        self.summary = tk.StringVar(value="")
+        ttk.Label(tab_res, textvariable=self.summary, font=FONT_B).pack(side="top", anchor="w", pady=(0, 4))
+        rb = ttk.Frame(tab_res)
+        rb.pack(side="bottom", fill="x", pady=(4, 0))
         self.tree = ttk.Treeview(tab_res, columns=[c[0] for c in RESULT_COLS], show="headings", height=16)
         for key, name, w in RESULT_COLS:
             self.tree.heading(key, text=name)
-            self.tree.column(key, width=w, anchor="center")
-        rb = ttk.Frame(tab_res)
-        rb.pack(side="bottom", fill="x", pady=(4, 0))
+            self.tree.column(key, width=w, anchor="w" if key == "비고" else "center", stretch=key == "비고")
+        self.tree.tag_configure("ok", background="#dff5e3")
+        self.tree.tag_configure("fail", background="#fbe0de")
         sb = ttk.Scrollbar(tab_res, orient="vertical", command=self.tree.yview)
         self.tree.configure(yscrollcommand=sb.set)
         self.tree.pack(side="left", fill="both", expand=True)
         sb.pack(side="left", fill="y")
-        ttk.Button(rb, text="결과 CSV 저장", command=self.save_results).pack(side="left")
-        ttk.Button(rb, text="결과 지우기", command=self._clear_results).pack(side="left", padx=4)
+        ttk.Button(rb, text="기록 파일 열기 (엑셀)", command=lambda: self._open(self.log.path)).pack(side="left")
+        ttk.Button(rb, text="기록 폴더 열기", command=lambda: self._open(self.log.path.parent)).pack(
+            side="left", padx=4)
         self.save_msg = tk.StringVar(value="")
-        ttk.Label(rb, textvariable=self.save_msg, foreground="#555").pack(side="left", padx=6)
+        ttk.Label(rb, textvariable=self.save_msg, foreground="#555", font=FONT_S).pack(side="left", padx=6)
+        for r in self.log.rows[-TABLE_MAX_ROWS:]:       # 지난 기록도 보여 줌
+            self._insert_row(r)
+        self._update_summary()
 
         self.applied_restart = {p.key: self._panel_value_from_cfg(p) for p in PARAMS if not p.live}
         self._update_pending()
@@ -487,29 +499,52 @@ class ControlPanel:
     def set_ros_status(self, text: str):
         self.ros_status.set(text)
 
-    def add_result(self, row: dict):
-        row = dict(row, no=len(self.results) + 1)
-        self.results.append(row)
-        self.tree.insert("", "end", values=[
-            row["no"], "임무" if row.get("mode") == "mission" else "견인", row["seed"], f"{row['speed']:.1f}",
-            f"{row['wave']:.1f}", REASON_KO.get(row["reason"], row["reason"]), f"{row['time']:.1f}",
-            f"{row['airway']:.0f}", f"{row['tension']:.0f}", row.get("note", "")])
+    def add_result(self, res: dict) -> dict[str, str]:
+        """한 판 결과(영어 키 dict)를 기록 파일에 붙이고 표에 보여 줌. 붙인 기록 줄을 돌려줌."""
+        row = self.log.add(res)
+        self._insert_row(row)
         self.tree.yview_moveto(1.0)
+        self._update_summary()
+        return row
 
-    def save_results(self):
-        if not self.results:
-            self.save_msg.set("저장할 결과가 없습니다")
+    @staticmethod
+    def _note(r: dict) -> str:
+        if r.get("모드") == "구조 임무":
+            parts = [f"{name} {r[key]}s" for name, key in (("감지", "감지까지(s)"), ("튜브 잡기", "튜브 잡기까지(s)"),
+                                                          ("연결", "줄 연결까지(s)")) if r.get(key)]
+            note = " · ".join(parts)
+        else:
+            note = f"점수 {r['점수(끌고 오기)']}" if r.get("점수(끌고 오기)") else ""
+        return note + ("  (도중에 값 바꿈)" if r.get("도중에 값 바꿈") else "")
+
+    def _insert_row(self, r: dict):
+        values = [self._note(r) if key == "비고" else r.get(key, "") for key, _n, _w in RESULT_COLS]
+        self.tree.insert("", "end", values=values, tags=("ok" if r.get("성공") == "O" else "fail",))
+        kids = self.tree.get_children()
+        if len(kids) > TABLE_MAX_ROWS:
+            self.tree.delete(kids[0])
+
+    def _update_summary(self):
+        rows = self.log.rows
+        n = len(rows)
+        ok = sum(r.get("성공") == "O" for r in rows)
+        if n:
+            last = rows[-1]
+            self.summary.set(f"전체 {n}회  ·  성공 {ok}  ·  실패 {n - ok}  ·  성공률 {ok / n * 100:.0f}%"
+                             f"      마지막: {last.get('회차')}회차 {last.get('결과')}")
+        else:
+            self.summary.set("아직 기록이 없습니다. 한 판이 끝날 때마다 여기에 자동으로 쌓입니다.")
+        self.save_msg.set(self.log.error or f"자동 저장: {self.log.path}")
+
+    def _open(self, path: Path):
+        path.parent.mkdir(parents=True, exist_ok=True)
+        if not path.exists():
+            self.save_msg.set("아직 기록 파일이 없습니다 (한 판이 끝나면 생김)")
             return
-        self.results_dir.mkdir(parents=True, exist_ok=True)
-        path = self.results_dir / "viewer_runs.csv"
-        keys: list[str] = []
-        for r in self.results:                  # 모드마다 열이 달라서 전체 열을 모음
-            keys += [k for k in r if k not in keys]
-        with open(path, "w", newline="", encoding="utf-8-sig") as f:   # 엑셀에서 한글 안 깨지게 BOM
-            w = csv.DictWriter(f, fieldnames=keys)
-            w.writeheader()
-            w.writerows(self.results)
-        self.save_msg.set(f"저장: {path}")
+        if sys.platform == "win32":
+            os.startfile(path)        # noqa: S606  (엑셀/탐색기로 열기)
+        else:
+            subprocess.Popen(["xdg-open", str(path)])
 
     def right_edge(self) -> int:
         """패널 창의 오른쪽 끝 x 좌표 (테두리 포함)."""
@@ -520,12 +555,6 @@ class ControlPanel:
     def _reset_defaults(self):
         for p in PARAMS:
             self._set_var(p, round(get_cfg(self.defaults, p.key) / p.to_cfg, 6))
-
-    def _clear_results(self):
-        self.results.clear()
-        for item in self.tree.get_children():
-            self.tree.delete(item)
-        self.save_msg.set("")
 
     def _on_close(self):
         self.closed = True

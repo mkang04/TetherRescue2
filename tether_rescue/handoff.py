@@ -22,8 +22,6 @@ from .scene import (IDLE_BEND, TUBE_CHEST_X, TUBE_MAJOR, TUBE_MINOR, HumanPuppet
 DECK, OFFERED, GRABBING, DONNING, WORN = "DECK", "OFFERED", "GRABBING", "DONNING", "WORN"
 STATE_KO = {DECK: "갑판 위", OFFERED: "건네는 중", GRABBING: "사람이 잡는 중", DONNING: "사람이 끼우는 중",
             WORN: "착용 (줄 연결)"}
-STATE_EN = {DECK: "on deck", OFFERED: "offered at bow", GRABBING: "victim reaching", DONNING: "victim putting on",
-            WORN: "worn (tether on)"}
 
 BOW_GAP = 0.05                                     # 뱃머리 끝과 튜브 바깥 사이 [m]
 Q_CHEST = np.array([math.cos(math.pi / 4), 0.0, math.sin(math.pi / 4), 0.0])   # 튜브 고리를 가슴 둘레로 세움

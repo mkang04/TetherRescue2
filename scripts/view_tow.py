@@ -12,7 +12,8 @@
 
 창 두 개
 - 실험 설정 패널 (왼쪽): 탭 [실험 값] [구조 임무 · 지도] [실험 결과]
-- MuJoCo 뷰어 (오른쪽): 왼쪽 위 상태, 오른쪽 실시간 그래프, 왼쪽 아래 단축키 안내
+- MuJoCo 뷰어 (오른쪽): 왼쪽 위 상태, 오른쪽 실시간 그래프, 왼쪽 아래 단축키 안내 (모두 한글)
+  판이 끝날 때마다 results/실험기록.csv 에 회차별로 자동 기록
   줄 색: 노랑=느슨, 주황→빨강=팽팽, 회색=끊어짐 / 빨간 기둥=목표 좌표, 초록 공=감지로 찾은 사람,
   주황 선=열화상 시야, 파랑 선=소나 시야, 노란 공=로봇이 생각하는 자기 위치(GPS)
 
@@ -30,7 +31,6 @@ import argparse
 import math
 import sys
 import time
-from collections import deque
 from pathlib import Path
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -43,10 +43,13 @@ import numpy as np  # noqa: E402
 from tether_rescue.bridge.messages import build_state  # noqa: E402
 from tether_rescue.bridge.udp_link import SimLink  # noqa: E402
 from tether_rescue.config import load_config  # noqa: E402
-from tether_rescue.handoff import STATE_EN  # noqa: E402
+from tether_rescue.handoff import STATE_KO  # noqa: E402
 from tether_rescue.metrics import compute_metrics  # noqa: E402
+from tether_rescue.mission.guidance import PHASE_KO  # noqa: E402
 from tether_rescue.mission.mission_sim import MissionSim  # noqa: E402
+from tether_rescue.ui import overlay  # noqa: E402
 from tether_rescue.ui.control_panel import ControlPanel, set_cfg  # noqa: E402
+from tether_rescue.ui.run_log import REASON_KO  # noqa: E402
 
 # GLFW 키 코드
 KEY_SPACE, KEY_BACKSPACE, KEY_UP, KEY_DOWN = 32, 259, 265, 264
@@ -59,63 +62,12 @@ PLOT_SECONDS = 15.0
 SLOWMO_STEPS = [0.25, 0.5, 1.0, 2.0, 4.0, 8.0]   # 1 = 실시간, 2 = 두 배 느리게
 SPEED_MIN, SPEED_MAX = 0.2, 3.0
 
-# 뷰어 글꼴은 한글을 못 그리므로 화면 글자는 영어로 씁니다.
-REASON_TEXT = {"success": "RESCUED", "tether_broken": "TETHER BROKEN", "capsized": "ROBOT CAPSIZED",
-               "timeout": "TIMEOUT", "not_found": "VICTIM NOT FOUND"}
-PHASE_TEXT = {"WAIT_GOAL": "waiting for coordinate", "TRANSIT": "GPS transit to coordinate",
-              "SEARCH": "searching nearby", "APPROACH": "direct sensing approach",
-              "HANDOFF": "handing tube to victim", "TOW": "towing to base",
-              "DONE": "done", "TOW_ONLY": "towing"}
-CAMERA_NAMES = {6: "follow human", 7: "follow robot", 8: "top view"}
-
-HELP_KEYS = "\n".join(["Space", "Backspace", "Up / Down", "= / -", "6 / 7 / 8", "9", "Mouse"])
-HELP_DESC = "\n".join(["pause / resume", "restart", "tow speed +/- 0.1", "faster / slower (slow motion)",
-                       "camera: human / robot / top", "graphs on / off", "L-drag rotate, R-drag move, wheel zoom"])
-
-
-class Plot:
-    """mjvFigure 하나 (최근 PLOT_SECONDS 초 롤링 그래프)."""
-
-    def __init__(self, title: str, lines: list[tuple[str, tuple[float, float, float]]], y_range, n_max):
-        f = mujoco.MjvFigure()
-        f.title = title
-        f.flg_extend = 0
-        f.flg_legend = 1
-        f.flg_ticklabel[:] = [1, 1]
-        f.gridsize[:] = [4, 4]
-        f.range[1] = y_range
-        f.figurergba[:] = [0.08, 0.08, 0.10, 0.75]
-        f.panergba[:] = [0.15, 0.15, 0.18, 0.75]
-        f.gridrgb[:] = [0.35, 0.35, 0.4]
-        f.textrgb[:] = [1, 1, 1]
-        f.linewidth = 2.0
-        f.yformat = "%.1f" if y_range[1] - y_range[0] < 20 else "%.0f"
-        for i, (name, rgb) in enumerate(lines):
-            f.linename[i] = name
-            f.linergb[i] = rgb
-        self.fig = f
-        self.n_lines = len(lines)
-        self.buf = [deque(maxlen=n_max) for _ in range(self.n_lines + 1)]   # [t, y0, y1, ...]
-
-    def clear(self):
-        for b in self.buf:
-            b.clear()
-
-    def push(self, t: float, *ys: float):
-        self.buf[0].append(t)
-        for b, y in zip(self.buf[1:], ys):
-            b.append(y)
-
-    def refresh(self):
-        t = np.fromiter(self.buf[0], float)
-        n = len(t)
-        t_end = t[-1] if n else 0.0
-        self.fig.range[0] = [t_end - PLOT_SECONDS, t_end]
-        for i in range(self.n_lines):
-            self.fig.linepnt[i] = n
-            if n:
-                self.fig.linedata[i, 0:2 * n:2] = t
-                self.fig.linedata[i, 1:2 * n:2] = np.fromiter(self.buf[i + 1], float)
+# 화면 글자는 한글 글꼴로 그림을 만들어 얹습니다 (tether_rescue/ui/overlay.py).
+OVERLAY_INTERVAL = 0.08          # 글자·그래프 그림을 다시 만드는 간격 [s] (초당 약 12번)
+CAMERA_NAMES = {6: "사람 따라가기", 7: "로봇 따라가기", 8: "위에서 보기"}
+HELP_ROWS = [("Space", "일시정지 / 계속"), ("Backspace", "처음부터 다시"), ("↑ / ↓", "견인 속도 +0.1 / -0.1"),
+             ("= / -", "빠르게 / 느리게"), ("6 / 7 / 8", "카메라: 사람 / 로봇 / 위"), ("9", "그래프 켜기 / 끄기"),
+             ("마우스", "왼쪽 끌기 회전 · 오른쪽 끌기 이동 · 휠 확대")]
 
 
 # --------------------------------------------------------------------------- 3D 장면에 임무 표시 그리기
@@ -196,6 +148,84 @@ def place_viewer_window(title: str, left: int) -> bool:
     return True
 
 
+def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio, result_line) -> list:
+    """뷰어 위에 얹을 한글 그림들: 왼쪽 위 상태, 왼쪽 아래 단축키, 오른쪽 그래프, 가운데 위 알림.
+    반환: [(MjrRect, RGB 배열), ...]  (MjrRect는 왼쪽 아래가 원점)"""
+    W, H = vp.width, vp.height
+    size = int(min(max(H / 50, 13), 24))
+    margin = 8
+    G, B, Y, I = overlay.GOOD, overlay.BAD, overlay.WARN, overlay.INFO
+
+    rows = [("상태", f"{run_ko}  ({play})", Y if ui["paused"] else None), ("시간", f"{obs['t']:.1f} 초")]
+    if sim.mode == "mission":
+        tube = STATE_KO.get(obs.get("tube"), "")
+        if obs.get("tube") in ("OFFERED", "GRABBING"):
+            tube += f"  (손까지 {obs['tube_reach']:.2f} / 팔 {cfg.human.arm_reach:.2f} m)"
+        rows += [("단계", PHASE_KO.get(phase, phase), I), ("구명튜브", tube),
+                 ("GPS 오차", f"{obs['gps_error']:.1f} m"), ("사람 ~ 기지", f"{obs['human_home_dist']:.1f} m")]
+    else:
+        rows += [("단계", "끌고 오기", I), ("이동 거리", f"{obs['progress']:.1f} / {cfg.sim.goal_distance:.0f} m")]
+    if not sim.tether.attached:
+        tether, tcol = "연결 안 됨", None
+    elif obs["tether_broken"]:
+        tether, tcol = "끊어짐!", B
+    else:
+        tether, tcol = f"{obs['tension']:.0f} N  (끊어지는 힘의 {ratio * 100:.0f}%)", (Y if ratio > 0.8 else None)
+    rows += [("", ""),
+             ("견인 목표 속도", f"{cfg.pid.target_speed:.1f} m/s"),
+             ("로봇 속도", f"{obs['robot_speed']:.2f} m/s"),
+             ("사람 속도", f"{obs['human_speed']:.2f} m/s"),
+             ("추진력", f"최대의 {obs['thrust_level'] * 100:+.0f}%  ({obs['thrust_level'] * cfg.robot.max_thrust:+.0f} N)"),
+             ("", ""),
+             ("줄 힘", tether, tcol),
+             ("입 높이", f"{obs['mouth_clearance'] * 100:+.1f} cm (수면 기준)"),
+             ("얼굴", "물 밖 (숨 쉼)" if obs["airway_ok"] else "물에 잠김!", G if obs["airway_ok"] else B),
+             ("로봇 기울기", f"{math.degrees(obs['tilt']):.1f}도"),
+             ("", ""),
+             ("파고 / 시드", f"{sim.waves.wave_height:.1f} m / {cfg.sim.seed}"),
+             ("카메라", CAMERA_NAMES[ui["camera"]])]
+    if link is not None:
+        rows.append(("ROS2", "브리지 연결됨" if link.bridge_alive else "보내는 중 (브리지 응답 없음)",
+                     G if link.bridge_alive else Y))
+
+    out = []
+    img = overlay.info_box(rows, size, int(W * 0.45), int(H * 0.68))
+    out.append((mujoco.MjrRect(margin, H - img.shape[0] - margin, img.shape[1], img.shape[0]), img))
+    img = overlay.info_box(HELP_ROWS, max(11, int(size * 0.8)), int(W * 0.45), int(H * 0.28))
+    out.append((mujoco.MjrRect(margin, margin, img.shape[1], img.shape[0]), img))
+
+    if ui["graphs"]:
+        gw = min(max(340, int(W * 0.30)), W // 2)
+        gh = max(150, int(H * 0.26))
+        # 눈금 4칸이 딱 떨어지는 범위 (값이 바뀌면 따라감)
+        v_hi = 3.0 if cfg.pid.target_speed + 0.6 <= 3.0 else 5.0
+        f_hi = math.ceil(cfg.tether.break_force * 1.1 / 100) * 100
+        ranges = [(-1.0, v_hi), (0.0, f_hi), (-16.0, 16.0)]
+        for i, (p, yr) in enumerate(zip(plots, ranges)):
+            if (i + 1) * gh > H:
+                break
+            img = p.render(gw, gh, yr, PLOT_SECONDS, max(11, int(size * 0.85)))
+            out.append((mujoco.MjrRect(W - gw, H - (i + 1) * gh, gw, gh), img))
+
+    # 가운데 위 알림
+    if result_line:
+        title, color, detail = result_line
+        sub = detail + ("\n3초 뒤 다음 판  (Backspace = 같은 시드로 다시)" if ui["auto"] else "\nBackspace = 다시 하기")
+        img = overlay.banner(title, sub, color, size, int(W * 0.5), int(H * 0.3))
+    elif ui["paused"]:
+        img = overlay.banner("일시정지", "Space를 누르면 계속합니다", Y, size, int(W * 0.5), int(H * 0.3))
+    elif sim.mode == "mission" and phase == "WAIT_GOAL":
+        img = overlay.banner("익수자 좌표를 기다리는 중",
+                             "패널 지도에서 익수자가 있을 것 같은 곳을 클릭하세요\n(rviz2 '2D Goal Pose' 도 가능)",
+                             I, size, int(W * 0.5), int(H * 0.3))
+    else:
+        img = None
+    if img is not None:
+        out.append((mujoco.MjrRect((W - img.shape[1]) // 2, H - img.shape[0] - margin, img.shape[1], img.shape[0]),
+                    img))
+    return out
+
+
 def result_row(cfg, sim, mode: str, modified: bool) -> dict:
     """결과 표 / CSV 한 줄 (끝난 시점의 설정값)."""
     row = {
@@ -211,11 +241,14 @@ def result_row(cfg, sim, mode: str, modified: bool) -> dict:
     if mode == "mission":
         mm = sim.metrics()
         f = (lambda v: "-" if v is None else f"{v:.0f}")
+        t0 = sim.goal_received_t
         row.update({
             "reason": mm.reason, "time": mm.total_time, "airway": mm.tow_airway_ratio * 100,
             "tension": mm.max_tension, "score": float("nan"),
             "note": f"감지 {f(mm.detect_time)}s · 연결 {f(mm.attach_time)}s · 목표오차 {f(mm.goal_error)}m",
             "detect_time": mm.detect_time, "attach_time": mm.attach_time, "goal_error": mm.goal_error,
+            "grab_time": None if (sim.grab_t is None or t0 is None) else sim.grab_t - t0,
+            "handoff_standoff": cfg.mission.handoff_standoff, "arm_reach": cfg.human.arm_reach,
             "gps_error_at_arrival": mm.gps_error_at_arrival, "false_alarms": mm.false_alarms,
             "gps_error_sigma": cfg.mission.gps_error, "report_error": cfg.mission.report_error,
             "thermal_range": cfg.thermal.range, "thermal_fov": cfg.thermal.fov, "sonar_range": cfg.sonar.range,
@@ -272,13 +305,12 @@ def main():
 
     n_pts = int(PLOT_SECONDS * cfg.sim.control_hz) + 1
     plots = [
-        Plot("Speed [m/s]", [("target", (0.7, 0.7, 0.7)), ("robot", (1.0, 0.55, 0.1)),
-                             ("human", (0.3, 0.8, 1.0))], [0.0, 2.6], n_pts),
-        Plot("Tether tension [N]", [("tension", (1.0, 0.3, 0.3)), ("break", (1.0, 1.0, 1.0))],
-             [0.0, cfg.tether.break_force * 1.1], n_pts),
-        Plot("Mouth above water [cm]", [("mouth", (0.3, 1.0, 0.5)), ("water level", (0.3, 0.5, 1.0))],
-             [-15.0, 15.0], n_pts),
+        overlay.Chart("속도 (m/s)", [("목표", (180, 180, 180)), ("로봇", (255, 140, 25)),
+                                    ("사람", (75, 205, 255))], n_pts),
+        overlay.Chart("줄 힘 (N)", [("줄 힘", (255, 80, 80)), ("끊어지는 힘", (240, 240, 240))], n_pts),
+        overlay.Chart("입 높이 (cm, 수면 기준)", [("입", (80, 255, 130)), ("수면", (80, 130, 255))], n_pts),
     ]
+    hud = {"t": -1.0, "images": []}     # 마지막으로 만든 화면 그림 (OVERLAY_INTERVAL마다 새로 만듦)
 
     # 단축키는 뷰어 스레드에서 들어오므로 여기에는 '요청'만 적고, 처리는 메인 루프에서 합니다.
     keys = {"pause": False, "restart": False, "speed_delta": 0.0, "slowmo_mul": 1.0, "camera": None,
@@ -476,12 +508,16 @@ def main():
                 plots[2].push(obs["t"], obs["mouth_clearance"] * 100, 0.0)
                 if sim.done:
                     row = result_row(cfg, sim, sim.mode, run["modified"])
-                    result_line = (f"{REASON_TEXT.get(row['reason'], row['reason'])}   time {row['time']:.1f} s   "
-                                   f"airway {row['airway']:.0f} %")
-                    print(f"■ 끝: {row['reason']}  시간 {row['time']:.1f}s  {row['note']}")
-                    end_time = time.perf_counter()
+                    no = ""
                     if panel:
-                        panel.add_result(row)
+                        no = f"{panel.add_result(row)['회차']}회차  "      # 기록 파일에 자동 저장
+                    reason_ko = REASON_KO.get(row["reason"], row["reason"])
+                    result_line = (f"{no}{reason_ko}",
+                                   overlay.GOOD if row["reason"] == "success" else overlay.BAD,
+                                   f"걸린 시간 {row['time']:.1f}초  ·  얼굴 물 밖 {row['airway']:.0f}%  ·  "
+                                   f"최대 줄 힘 {row['tension']:.0f} N")
+                    print(f"■ {no}끝: {reason_ko}  시간 {row['time']:.1f}s  {row['note']}")
+                    end_time = time.perf_counter()
             last_sim_time = sim.data.time
 
             # ---- 상태 dict (지도·rviz2·3D 표시 공통)
@@ -514,79 +550,24 @@ def main():
                 viewer.update_hfield(sim.hfield_id)
             frame += 1
 
-            # ---- 화면 글자
-            if ui["paused"]:
-                run_state, run_ko = "PAUSED", "일시정지"
-            elif sim.done:
-                run_state, run_ko = "FINISHED", "끝"
-            else:
-                run_state, run_ko = "RUNNING", "진행 중"
+            # ---- 화면 글자 (한글)
+            run_ko = "일시정지" if ui["paused"] else ("끝" if sim.done else "진행 중")
             sm = ui["slowmo"]
-            play = "real time" if sm == 1 else (f"{1 / sm:.0f}x faster" if sm < 1 else f"{sm:.0f}x slower")
+            play = "실시간" if sm == 1 else (f"{1 / sm:.0f}배 빠르게" if sm < 1 else f"{sm:.0f}배 느리게")
             phase = obs.get("phase", "TOW_ONLY")
             if panel:
                 prog = (f"사람-기지 {obs['human_home_dist']:.0f} m" if sim.mode == "mission"
                         else f"{obs['progress']:.1f} / {cfg.sim.goal_distance:.0f} m")
                 panel.set_status(f"{run_ko}  ·  {obs['t']:.1f} s  ·  {prog}", ui["paused"])
-            rows = [("STATE", f"{run_state}  ({play})"), ("time", f"{obs['t']:.1f} s")]
-            if sim.mode == "mission":
-                tube = STATE_EN.get(obs.get("tube"), "")
-                if obs.get("tube") in ("OFFERED", "GRABBING"):
-                    tube += f"  (hand {obs['tube_reach']:.2f} / reach {cfg.human.arm_reach:.2f} m)"
-                rows += [("phase", PHASE_TEXT.get(phase, phase)),
-                         ("rescue tube", tube),
-                         ("GPS error", f"{obs['gps_error']:.1f} m"),
-                         ("victim to base", f"{obs['human_home_dist']:.1f} m")]
-            else:
-                rows += [("distance", f"{obs['progress']:.1f} / {cfg.sim.goal_distance:.0f} m")]
-            rows += [("", ""), ("tow speed set", f"{cfg.pid.target_speed:.1f} m/s"),
-                     ("robot speed", f"{obs['robot_speed']:.2f} m/s"),
-                     ("human speed", f"{obs['human_speed']:.2f} m/s"),
-                     ("thrust", f"{obs['thrust_level'] * 100:+.0f}% of max  "
-                                f"({obs['thrust_level'] * cfg.robot.max_thrust:+.0f} N)"), ("", ""),
-                     ("tether", ("not attached" if not sim.tether.attached else
-                                 "BROKEN" if obs["tether_broken"] else
-                                 f"{obs['tension']:.0f} N  ({ratio * 100:.0f}% of break)")),
-                     ("mouth", f"{obs['mouth_clearance'] * 100:+.1f} cm"),
-                     ("airway", "OK" if obs["airway_ok"] else "SUBMERGED !"),
-                     ("robot tilt", f"{math.degrees(obs['tilt']):.1f} deg"), ("", ""),
-                     ("waves / seed", f"Hs {sim.waves.wave_height:.1f} m / {cfg.sim.seed}"),
-                     ("camera", CAMERA_NAMES[ui["camera"]])]
-            if link is not None:
-                rows.append(("ROS2", "bridge connected" if link.bridge_alive else "sending (no bridge reply)"))
-            texts = [
-                (mujoco.mjtFontScale.mjFONTSCALE_150, mujoco.mjtGridPos.mjGRID_TOPLEFT,
-                 "\n".join(r[0] for r in rows), "\n".join(r[1] for r in rows)),
-                (mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_BOTTOMLEFT, HELP_KEYS, HELP_DESC),
-            ]
-            # 가운데 위 알림 (한 칸에 몰아 써야 글자가 겹치지 않음)
-            banner = None
-            if result_line:
-                banner = result_line + ("\nnext run in 3 s  (Backspace = same seed again)" if ui["auto"]
-                                        else "\nBackspace = run again")
-            elif ui["paused"]:
-                banner = "PAUSED  -  press Space to resume"
-            elif sim.mode == "mission" and phase == "WAIT_GOAL":
-                banner = "WAITING FOR VICTIM COORDINATE\nclick the map in the panel  (or rviz2 '2D Goal Pose')"
-            if banner:
-                texts.append((mujoco.mjtFontScale.mjFONTSCALE_200, mujoco.mjtGridPos.mjGRID_TOP, banner, None))
-            viewer.set_texts(texts)
 
-            # ---- 그래프 (오른쪽, 창 크기에 맞춰 배치). 값이 바뀌면 축 범위도 따라감
-            plots[0].fig.range[1] = [0.0, max(2.6, cfg.pid.target_speed + 0.6)]
-            plots[1].fig.range[1] = [0.0, brk * 1.1]
+            now = time.perf_counter()
             vp = viewer.viewport
-            if ui["graphs"] and vp is not None and vp.width > 0:
-                w = max(320, int(vp.width * 0.30))
-                h = max(150, int(vp.height * 0.26))
-                figs = []
-                for i, p in enumerate(plots):
-                    p.refresh()
-                    rect = mujoco.MjrRect(vp.width - w, vp.height - (i + 1) * h, w, h)
-                    figs.append((rect, p.fig))
-                viewer.set_figures(figs)
-            else:
-                viewer.clear_figures()
+            if vp is not None and vp.width > 0 and now - hud["t"] >= OVERLAY_INTERVAL:
+                hud["t"] = now
+                hud["images"] = make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
+                                             result_line)
+            if hud["images"]:
+                viewer.set_images(hud["images"])
 
             viewer.sync()
             wait = dt * ui["slowmo"] - (time.perf_counter() - tick)
