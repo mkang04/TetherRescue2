@@ -157,6 +157,8 @@ DECK ──▶ OFFERED ──▶ GRABBING ──▶ DONNING ──▶ WORN
 
 ## Outcomes & Score
 
+> 자세한 내용(판정 순서, 설정 키, 알아둘 점)은 [OUTCOMES.md](OUTCOMES.md)에 있습니다.
+
 | 결과 | 조건 |
 | --- | --- |
 | 성공 | 끌고 오기: 사람이 50 m 이동 / 구조 임무: 사람이 기지 5 m 안 |
