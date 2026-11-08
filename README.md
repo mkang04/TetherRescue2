@@ -147,6 +147,7 @@ MuJoCo 뷰어 기본 단축키 중 쓸 만한 것: `1` 물 표면 숨기기/보�
 
 | 경로 | 역할 |
 | --- | --- |
+| `docs/CORE_LOGIC.md` | 핵심 로직 설명 (물리·줄·PID·구조 임무·튜브 건네기·성적) |
 | `config/tow_default.yaml` | 모든 설정값 (파도, 로봇, 사람, 줄, PID). 숫자는 여기서만 바꿉니다 |
 | `tether_rescue/ocean/waves.py` | 파도: 사인파 여러 개 겹치기, 시드 고정 |
 | `tether_rescue/ocean/hydro.py` | 부력(블록 조각) + 물 저항(앞뒤·좌우·위아래 따로) |
