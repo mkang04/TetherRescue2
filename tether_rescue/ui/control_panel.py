@@ -1,8 +1,8 @@
 """실험 설정 패널 (tkinter 창). MuJoCo 뷰어 옆에 띄워서 값을 바꾸며 실험합니다.
 
 탭
-- 실험 값: 끌고 오기·바다·줄·PID 값 (바로 적용) + 다시 시작할 때 적용 값
-- 구조 임무 · 지도: 모드 선택, 지도(클릭 = 목표 좌표, rviz2 "2D Goal Pose"와 같은 역할), 임무·센서 값, ROS2 연결
+- 실험 설정 · 지도: 모드 선택, 지도(클릭 = 목표 좌표, rviz2 "2D Goal Pose"와 같은 역할), ROS2 연결,
+  그 아래 모든 값 (구조 임무·센서·끌고 오기·바다·줄·PID). 화면보다 길면 마우스 휠로 스크롤
 - 실험 결과: 판이 끝날 때마다 회차별로 자동 기록 (results/실험기록.csv), 성공 초록 · 실패 빨강
 
 "바로 적용" 값은 바꾸는 즉시 반영, "다시 시작할 때 적용" 값은 [적용하고 다시 시작] 을 눌러야 반영.
@@ -179,24 +179,14 @@ class ControlPanel:
         nb = ttk.Notebook(outer)
         nb.pack(fill="both", expand=True, pady=(2, 0))
         self.notebook = nb
-        tab_vals, tab_mission, tab_res = ttk.Frame(nb, padding=6), ttk.Frame(nb, padding=6), ttk.Frame(nb, padding=6)
-        nb.add(tab_vals, text="실험 값")
-        nb.add(tab_mission, text="구조 임무 · 지도")
+        # 탭 두 개: [실험 설정 · 지도] (모드·지도·모든 값, 스크롤) / [실험 결과]
+        tab_set, tab_res = ttk.Frame(nb), ttk.Frame(nb, padding=6)
+        nb.add(tab_set, text="실험 설정 · 지도")
         nb.add(tab_res, text="실험 결과")
+        tab_mission = _ScrollFrame(tab_set).inner
 
         self.vars: dict[str, tk.Variable] = {}
-        frames: dict[str, ttk.LabelFrame] = {}
 
-        # 실험 값 탭: 두 열
-        cols = ttk.Frame(tab_vals)
-        cols.pack(fill="x")
-        left, right = ttk.Frame(cols), ttk.Frame(cols)
-        left.pack(side="left", fill="both", expand=True, padx=(0, 4))
-        right.pack(side="left", fill="both", expand=True, padx=(4, 0))
-        ttk.Label(tab_vals, text="단축키(뷰어 창): Space 일시정지 · Backspace 다시 시작 · ↑/↓ 목표 속도\n"
-                                 "=/- 재생 속도 · 6/7/8 카메라 · 9 그래프", foreground="#555").pack(anchor="w", pady=(6, 0))
-
-        # 구조 임무 탭
         mtop = ttk.Frame(tab_mission)
         mtop.pack(fill="x")
         ttk.Label(mtop, text="모드", font=FONT_B).pack(side="left")
@@ -223,21 +213,25 @@ class ControlPanel:
         ttk.Checkbutton(ros, text="ROS2 연결 (rviz2)", variable=self.ros_enabled).pack(side="left")
         self.ros_status = tk.StringVar(value="꺼짐  —  WSL에서 ros_bridge_wsl.bat 실행 후 체크")
         ttk.Label(ros, textvariable=self.ros_status, foreground="#555", font=FONT_S).pack(side="left", padx=6)
-        mcols = ttk.Frame(tab_mission)
-        mcols.pack(fill="x")
-        mleft, mright = ttk.Frame(mcols), ttk.Frame(mcols)
-        mleft.pack(side="left", fill="both", expand=True, padx=(0, 4))
-        mright.pack(side="left", fill="both", expand=True, padx=(4, 0))
-
-        place = {G_TOW: left, G_SEA: left, G_PID: right, G_RESTART: right,
-                 G_MISSION: mleft, G_MRESTART: mleft, G_SENSOR: mright}
+        # 값: 두 열. 왼쪽 = 구조 임무 → 끌고 오기 → 바다, 오른쪽 = 센서 → PID → 다시 시작할 때 적용
+        cols = ttk.Frame(tab_mission)
+        cols.pack(fill="x")
+        left, right = ttk.Frame(cols), ttk.Frame(cols)
+        left.pack(side="left", fill="both", expand=True, padx=(0, 4), anchor="n")
+        right.pack(side="left", fill="both", expand=True, padx=(4, 0), anchor="n")
+        layout = [(left, [G_MISSION, G_MRESTART, G_TOW, G_SEA]), (right, [G_SENSOR, G_PID, G_RESTART])]
+        live = {p.group: p.live for p in PARAMS}
+        frames: dict[str, ttk.LabelFrame] = {}
+        for col, groups in layout:
+            for g in groups:
+                frames[g] = ttk.LabelFrame(col, text=g + ("  (바로 적용)" if live[g] else ""), padding=4)
+                frames[g].pack(fill="x", pady=3)
+                frames[g].columnconfigure(1, weight=1)
         for p in PARAMS:
-            if p.group not in frames:
-                title = p.group + ("  (바로 적용)" if p.live else "")
-                frames[p.group] = ttk.LabelFrame(place[p.group], text=title, padding=4)
-                frames[p.group].pack(fill="x", pady=3)
-                frames[p.group].columnconfigure(1, weight=1)
             self._add_slider(frames[p.group], p)
+        ttk.Label(tab_mission, text="단축키(뷰어 창): Space 일시정지 · Backspace 다시 시작 · ↑/↓ 목표 속도 · "
+                                    "=/- 재생 속도 · 6/7/8 카메라 · 9 그래프",
+                  foreground="#555", font=FONT_S).pack(anchor="w", pady=(6, 0))
 
         # 결과 탭: 위 요약, 가운데 표, 아래 버튼
         self.summary = tk.StringVar(value="")
@@ -567,6 +561,34 @@ class ControlPanel:
                 self.root.destroy()
             except tk.TclError:
                 pass
+
+
+class _ScrollFrame:
+    """세로 스크롤 영역. 내용은 self.inner 에 넣습니다. 높이는 화면에 맞춰 자동으로 정해짐 (마우스 휠로 스크롤)."""
+
+    RESERVED_H = 260      # 화면 높이에서 패널 위쪽(제목·버튼·탭 머리)과 작업 표시줄 몫으로 남겨 둘 높이
+
+    def __init__(self, parent):
+        self.canvas = tk.Canvas(parent, highlightthickness=0, borderwidth=0)
+        self.bar = ttk.Scrollbar(parent, orient="vertical", command=self.canvas.yview)
+        self.canvas.configure(yscrollcommand=self.bar.set)
+        self.inner = ttk.Frame(self.canvas, padding=6)
+        self._win = self.canvas.create_window((0, 0), window=self.inner, anchor="nw")
+        self.canvas.pack(side="left", fill="both", expand=True)
+        self.bar.pack(side="left", fill="y")
+        self.inner.bind("<Configure>", self._on_inner)
+        self.canvas.bind("<Configure>", lambda e: self.canvas.itemconfigure(self._win, width=e.width))
+        self.canvas.bind("<Enter>", lambda _e: self.canvas.bind_all("<MouseWheel>", self._on_wheel))
+        self.canvas.bind("<Leave>", lambda _e: self.canvas.unbind_all("<MouseWheel>"))
+
+    def _on_inner(self, _e=None):
+        w, h = self.inner.winfo_reqwidth(), self.inner.winfo_reqheight()
+        max_h = max(300, self.canvas.winfo_screenheight() - self.RESERVED_H)
+        self.canvas.configure(scrollregion=(0, 0, w, h), width=w, height=min(h, max_h))
+
+    def _on_wheel(self, e):
+        if self.canvas.yview() != (0.0, 1.0):          # 다 보이면 스크롤 안 함
+            self.canvas.yview_scroll(int(-e.delta / 120) * 3, "units")
 
 
 class _Tooltip:

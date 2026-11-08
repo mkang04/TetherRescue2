@@ -53,7 +53,7 @@ def _fit(img: Image.Image, max_w: int, max_h: int) -> np.ndarray:
 def info_box(rows: list[tuple], size: int, max_w: int, max_h: int) -> np.ndarray:
     """두 칸 표 (이름 | 값). rows: (이름, 값) 또는 (이름, 값, 색). 이름이 ""이면 빈 줄(구분)."""
     f, fb = font(size), font(size, bold=True)
-    pad, gap, line = size // 2 + 4, size, int(size * 1.45)
+    pad, gap, line = size // 2 + 2, int(size * 0.8), int(size * 1.35)
     lw = max(_text_w(f, r[0]) for r in rows)
     vw = max(_text_w(fb, r[1]) for r in rows)
     heights = [line if r[0] or r[1] else line // 2 for r in rows]
@@ -70,19 +70,20 @@ def info_box(rows: list[tuple], size: int, max_w: int, max_h: int) -> np.ndarray
 
 def banner(title: str, sub: str, color, size: int, max_w: int, max_h: int) -> np.ndarray:
     """가운데 위 알림 (큰 제목 + 작은 설명)."""
-    ft, fs = font(int(size * 1.6), bold=True), font(size)
-    pad = size
+    big = int(size * 1.25)
+    ft, fs = font(big, bold=True), font(max(10, size - 1))
+    pad = size // 2 + 2
     subs = [s for s in sub.split("\n") if s]
-    w = max([_text_w(ft, title)] + [_text_w(fs, s) for s in subs]) + pad * 2
-    h = pad * 2 + int(size * 1.6 * 1.3) + int(size * 1.4) * len(subs)
+    w = max([_text_w(ft, title)] + [_text_w(fs, s) for s in subs]) + pad * 3
+    h = pad * 2 + int(big * 1.3) + int(size * 1.3) * len(subs)
     img = Image.new("RGB", (w, h), BG)
     d = ImageDraw.Draw(img)
-    d.rectangle([0, 0, w - 1, h - 1], outline=color, width=3)
+    d.rectangle([0, 0, w - 1, h - 1], outline=color, width=2)
     d.text(((w - _text_w(ft, title)) // 2, pad), title, font=ft, fill=color)
-    y = pad + int(size * 1.6 * 1.3)
+    y = pad + int(big * 1.3)
     for s in subs:
         d.text(((w - _text_w(fs, s)) // 2, y), s, font=fs, fill=WHITE)
-        y += int(size * 1.4)
+        y += int(size * 1.3)
     return _fit(img, max_w, max_h)
 
 

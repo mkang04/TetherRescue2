@@ -11,7 +11,7 @@
 - 끌고 오기만: 줄이 연결된 상태에서 PID로 끌고 오기 (기존)
 
 창 두 개
-- 실험 설정 패널 (왼쪽): 탭 [실험 값] [구조 임무 · 지도] [실험 결과]
+- 실험 설정 패널 (왼쪽): 탭 [실험 설정 · 지도] [실험 결과]
 - MuJoCo 뷰어 (오른쪽): 왼쪽 위 상태, 오른쪽 실시간 그래프, 왼쪽 아래 단축키 안내 (모두 한글)
   판이 끝날 때마다 results/실험기록.csv 에 회차별로 자동 기록
   줄 색: 노랑=느슨, 주황→빨강=팽팽, 회색=끊어짐 / 빨간 기둥=목표 좌표, 초록 공=감지로 찾은 사람,
@@ -64,7 +64,6 @@ SPEED_MIN, SPEED_MAX = 0.2, 3.0
 
 # 화면 글자는 한글 글꼴로 그림을 만들어 얹습니다 (tether_rescue/ui/overlay.py).
 OVERLAY_INTERVAL = 0.08          # 글자·그래프 그림을 다시 만드는 간격 [s] (초당 약 12번)
-CAMERA_NAMES = {6: "사람 따라가기", 7: "로봇 따라가기", 8: "위에서 보기"}
 HELP_ROWS = [("Space", "일시정지 / 계속"), ("Backspace", "처음부터 다시"), ("↑ / ↓", "견인 속도 +0.1 / -0.1"),
              ("= / -", "빠르게 / 느리게"), ("6 / 7 / 8", "카메라: 사람 / 로봇 / 위"), ("9", "그래프 켜기 / 끄기"),
              ("마우스", "왼쪽 끌기 회전 · 오른쪽 끌기 이동 · 휠 확대")]
@@ -152,8 +151,9 @@ def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
     """뷰어 위에 얹을 한글 그림들: 왼쪽 위 상태, 왼쪽 아래 단축키, 오른쪽 그래프, 가운데 위 알림.
     반환: [(MjrRect, RGB 배열), ...]  (MjrRect는 왼쪽 아래가 원점)"""
     W, H = vp.width, vp.height
-    size = int(min(max(H / 50, 13), 24))
-    margin = 8
+    size = int(min(max(H / 78, 11), 15))          # 글자 (3D 화면을 덜 가리게 작게)
+    size_g = int(min(max(H / 50, 13), 24))        # 그래프 (크기 그대로)
+    margin = 6
     G, B, Y, I = overlay.GOOD, overlay.BAD, overlay.WARN, overlay.INFO
 
     rows = [("상태", f"{run_ko}  ({play})", Y if ui["paused"] else None), ("시간", f"{obs['t']:.1f} 초")]
@@ -181,17 +181,15 @@ def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
              ("입 높이", f"{obs['mouth_clearance'] * 100:+.1f} cm (수면 기준)"),
              ("얼굴", "물 밖 (숨 쉼)" if obs["airway_ok"] else "물에 잠김!", G if obs["airway_ok"] else B),
              ("로봇 기울기", f"{math.degrees(obs['tilt']):.1f}도"),
-             ("", ""),
-             ("파고 / 시드", f"{sim.waves.wave_height:.1f} m / {cfg.sim.seed}"),
-             ("카메라", CAMERA_NAMES[ui["camera"]])]
+             ("파고 / 시드", f"{sim.waves.wave_height:.1f} m / {cfg.sim.seed}")]
     if link is not None:
         rows.append(("ROS2", "브리지 연결됨" if link.bridge_alive else "보내는 중 (브리지 응답 없음)",
                      G if link.bridge_alive else Y))
 
     out = []
-    img = overlay.info_box(rows, size, int(W * 0.45), int(H * 0.68))
-    out.append((mujoco.MjrRect(margin, H - img.shape[0] - margin, img.shape[1], img.shape[0]), img))
-    img = overlay.info_box(HELP_ROWS, max(11, int(size * 0.8)), int(W * 0.45), int(H * 0.28))
+    img = overlay.info_box(rows, size, int(W * 0.30), int(H * 0.50))
+    out.append((mujoco.MjrRect(0, H - img.shape[0], img.shape[1], img.shape[0]), img))   # 모서리에 붙임
+    img = overlay.info_box(HELP_ROWS, max(10, size - 2), int(W * 0.30), int(H * 0.20))
     out.append((mujoco.MjrRect(margin, margin, img.shape[1], img.shape[0]), img))
 
     if ui["graphs"]:
@@ -204,20 +202,18 @@ def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
         for i, (p, yr) in enumerate(zip(plots, ranges)):
             if (i + 1) * gh > H:
                 break
-            img = p.render(gw, gh, yr, PLOT_SECONDS, max(11, int(size * 0.85)))
+            img = p.render(gw, gh, yr, PLOT_SECONDS, max(11, int(size_g * 0.85)))
             out.append((mujoco.MjrRect(W - gw, H - (i + 1) * gh, gw, gh), img))
 
     # 가운데 위 알림
     if result_line:
         title, color, detail = result_line
-        sub = detail + ("\n3초 뒤 다음 판  (Backspace = 같은 시드로 다시)" if ui["auto"] else "\nBackspace = 다시 하기")
-        img = overlay.banner(title, sub, color, size, int(W * 0.5), int(H * 0.3))
+        sub = detail + ("\n3초 뒤 다음 판 (Backspace = 같은 시드로 다시)" if ui["auto"] else "\nBackspace = 다시 하기")
+        img = overlay.banner(title, sub, color, size, int(W * 0.4), int(H * 0.15))
     elif ui["paused"]:
-        img = overlay.banner("일시정지", "Space를 누르면 계속합니다", Y, size, int(W * 0.5), int(H * 0.3))
+        img = overlay.banner("일시정지", "Space = 계속", Y, size, int(W * 0.4), int(H * 0.15))
     elif sim.mode == "mission" and phase == "WAIT_GOAL":
-        img = overlay.banner("익수자 좌표를 기다리는 중",
-                             "패널 지도에서 익수자가 있을 것 같은 곳을 클릭하세요\n(rviz2 '2D Goal Pose' 도 가능)",
-                             I, size, int(W * 0.5), int(H * 0.3))
+        img = overlay.banner("익수자 좌표 기다리는 중", "패널 지도를 클릭하세요", I, size, int(W * 0.4), int(H * 0.15))
     else:
         img = None
     if img is not None:
@@ -300,7 +296,6 @@ def main():
         panel.auto_restart.set(not args.no_loop)
         panel.ros_enabled.set(args.ros)
         if args.mode == "mission":
-            panel.notebook.select(1)              # 구조 임무 · 지도 탭을 먼저 보여 줌
             panel.camera.set(7)
 
     n_pts = int(PLOT_SECONDS * cfg.sim.control_hz) + 1
@@ -567,6 +562,10 @@ def main():
                 hud["images"] = make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
                                              result_line)
             if hud["images"]:
+                # 하늘(skybox) 텍스처를 그린 뒤 남는 OpenGL 상태 때문에 그림이 안 보이는 문제가 있음.
+                # 그림보다 먼저 그려지는 글자를 하나(빈 칸) 넣으면 그 상태가 정리되어 그림이 보임.
+                # (빈 칸 글자는 왼쪽 위 상태판에 가려져 안 보임)
+                viewer.set_texts([(mujoco.mjtFontScale.mjFONTSCALE_100, mujoco.mjtGridPos.mjGRID_TOPLEFT, " ", " ")])
                 viewer.set_images(hud["images"])
 
             viewer.sync()
