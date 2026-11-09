@@ -42,6 +42,9 @@ class RobotConfig:
     max_reverse: float = 0.3
     thrust_tau: float = 0.4
     max_rudder: float = 0.6
+    outboard_mass: float = 3.0   # 선외기(모터 머리·축·프로펠러) 질량 [kg], 전체 mass 안에 포함
+    steer_kp: float = 40.0       # 조향 서보 강성 [N·m/rad]
+    steer_tau: float = 0.1       # 조향 서보 반응 지연 (1차 지연 시정수) [s]
     drag_lin: list[float] = field(default_factory=lambda: [5.0, 60.0, 400.0])
     drag_quad: list[float] = field(default_factory=lambda: [12.0, 150.0, 200.0])
     ang_drag: list[float] = field(default_factory=lambda: [8.0, 8.0, 6.0])

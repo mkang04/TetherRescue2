@@ -88,6 +88,11 @@ class TowSim:
         self.tow_site, self.harness_site = sid("tow_point"), sid("harness")
         self.mouth_site, self.thruster_site = sid("mouth"), sid("thruster")
         self.hfield_id = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_HFIELD, "water")
+        # MuJoCo 구동기: 추진 모터, 조향 서보
+        self.thrust_act = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_ACTUATOR, "thrust")
+        self.steer_act = mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_ACTUATOR, "steer")
+        self._thrust_actadr = m.actuator_actadr[self.thrust_act]
+        self.steer_qadr = m.jnt_qposadr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_JOINT, "steer")]
         self._acc_adr = m.sensor_adr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SENSOR, "imu_acc")]
         self._gyro_adr = m.sensor_adr[mujoco.mj_name2id(m, mujoco.mjtObj.mjOBJ_SENSOR, "imu_gyro")]
 
@@ -196,18 +201,13 @@ class TowSim:
         wrench[self.hydro.body_ids, :3] += res.force
         wrench[self.hydro.body_ids, 3:] += res.torque
 
-        # 추진력: 선미 아래에서 (조향각만큼 꺾인 방향으로) 밀기
-        R = d.xmat[self.robot_id].reshape(3, 3)
-        # 엔진은 명령을 바로 따라가지 못함 (1차 지연)
-        tau = cfg.robot.thrust_tau
-        a = 1.0 if tau <= 0 else min(1.0, m.opt.timestep / tau)
-        self.thrust_level += a * (self.throttle - self.thrust_level)
-        thrust = self.thrust_level * cfg.robot.max_thrust
-        # rudder > 0 = 왼쪽(반시계)으로 돌기. 선미에서 미는 방향을 오른쪽으로 꺾어야
+        # 추진·조향: MuJoCo 구동기에 명령만 넣음 (힘 계산은 MuJoCo가 함)
+        # 추진 모터: 목표 추진력 [N]. 엔진 반응 지연은 구동기의 filterexact가 처리 (패널에서 바꿔도 반영)
+        m.actuator_dynprm[self.thrust_act, 0] = max(cfg.robot.thrust_tau, 1e-6)
+        d.ctrl[self.thrust_act] = self.throttle * cfg.robot.max_thrust
+        # 조향 서보: rudder > 0 = 왼쪽(반시계)으로 돌기. 선외기를 시계 방향(음수 각)으로 돌려야
         # 선미가 오른쪽으로 밀리고 뱃머리가 왼쪽으로 돕니다.
-        delta = -self.rudder * cfg.robot.max_rudder
-        f_thrust = R @ np.array([thrust * math.cos(delta), thrust * math.sin(delta), 0.0])
-        self._add_point_force(wrench, self.robot_id, f_thrust, d.site_xpos[self.thruster_site])
+        d.ctrl[self.steer_act] = -self.rudder * cfg.robot.max_rudder
 
         # 줄
         p_r, p_h = d.site_xpos[self.tow_site].copy(), d.site_xpos[self.harness_site].copy()
@@ -221,6 +221,9 @@ class TowSim:
 
         d.xfrc_applied[:] = wrench
         mujoco.mj_step(m, d)
+        # 실제 엔진 세기 = 모터의 현재 추진력 / 최대 추진력
+        mt = cfg.robot.max_thrust
+        self.thrust_level = float(d.act[self._thrust_actadr]) / mt if mt > 0 else 0.0
 
     # ------------------------------------------------------------------ 조종
     def step(self, throttle: float, rudder: float, target_speed: float = float("nan")) -> dict:
@@ -273,6 +276,7 @@ class TowSim:
             "acc_x": float(acc[0]), "acc_y": float(acc[1]), "acc_z": float(acc[2]),
             "throttle": self.throttle, "rudder": self.rudder,
             "thrust_level": self.thrust_level,   # 실제 엔진 세기 (최대 추진력 대비 비율)
+            "steer_angle": float(d.qpos[self.steer_qadr]),   # 실제 선외기 조향각 [rad] (+ = 반시계)
             "gyro_x": float(gyro[0]), "gyro_y": float(gyro[1]), "gyro_z": float(gyro[2]),
             "yaw_rate": yaw_rate,
             "robot_speed": robot_speed, "human_speed": human_speed, "target_speed": float("nan"),

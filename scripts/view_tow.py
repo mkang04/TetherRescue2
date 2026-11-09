@@ -30,6 +30,7 @@ from __future__ import annotations
 import argparse
 import math
 import sys
+import threading
 import time
 from pathlib import Path
 
@@ -145,6 +146,41 @@ def place_viewer_window(title: str, left: int) -> bool:
     user32.ShowWindow(hwnd, 9)                                         # SW_RESTORE (최대화 해제)
     user32.SetWindowPos(hwnd, 0, left, area.top, width, area.bottom - area.top, 0x0004)  # SWP_NOZORDER
     return True
+
+
+class HFieldUploader:
+    """물 표면(hfield)을 뷰어로 올리는 일을 따로 돌리는 스레드.
+
+    viewer.update_hfield()는 뷰어 그리기 스레드가 올려 줄 때까지 기다립니다.
+    뷰어 창을 닫은 직후에 부르면 그 스레드가 이미 멈춰 있어서 영원히 기다리고,
+    메인 루프가 멈춰 프로그램이 안 꺼졌습니다. 그래서 따로 돌리고, 메인 루프는 기다리지 않습니다.
+    (daemon 스레드라 거기서 멈춰 있어도 프로그램 종료를 막지 않음)"""
+
+    def __init__(self, viewer, hfield_id: int):
+        self.viewer, self.hfield_id = viewer, hfield_id
+        self.idle = threading.Event()
+        self.idle.set()
+        self.request = threading.Event()
+        threading.Thread(target=self._run, daemon=True).start()
+
+    def _run(self):
+        while True:
+            self.request.wait()
+            self.request.clear()
+            try:
+                if self.viewer.is_running():
+                    self.viewer.update_hfield(self.hfield_id)
+            except Exception:
+                pass
+            self.idle.set()
+
+    def try_upload(self, update_data) -> None:
+        """이전 업로드가 끝났을 때만 물 표면을 새로 계산해서 올려 달라고 요청 (아니면 이번 프레임은 건너뜀)."""
+        if not self.idle.is_set():
+            return
+        self.idle.clear()
+        update_data()
+        self.request.set()
 
 
 def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio, result_line) -> list:
@@ -387,6 +423,7 @@ def main():
                                       show_left_ui=False, show_right_ui=False) as viewer:
         frame = 0
         placed = panel is None
+        water = HFieldUploader(viewer, sim.hfield_id)
         while viewer.is_running():
             tick = time.perf_counter()
             want_restart = False
@@ -541,8 +578,7 @@ def main():
 
             # 물 표면 (2프레임마다 = 25Hz)
             if frame % 2 == 0:
-                sim.update_water_surface()
-                viewer.update_hfield(sim.hfield_id)
+                water.try_upload(sim.update_water_surface)
             frame += 1
 
             # ---- 화면 글자 (한글)

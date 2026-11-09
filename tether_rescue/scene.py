@@ -233,6 +233,13 @@ def build_mjcf(cfg: TowConfig) -> str:
     tube_free = _ring("tube_free_", [0.0, 0.0, 0.0], "z", "1 0.35 0.05 1", "0.97 0.97 0.97 1")
     human_vis = _human_visual(h)
     post = np.array([-0.62 * sx, 0.0, top + 0.10])     # 견인 기둥 꼭대기 (줄이 시작하는 곳으로 보임)
+    # 선외기: 모터 머리(갑판 위)부터 프로펠러(선체 아래)까지 세로 막대로 보고 관성을 어림함
+    prop_z = -rs[2] - 0.05                              # 프로펠러 깊이 (몸체 좌표)
+    ob_top = top + 0.15
+    ob_zc, ob_len = (ob_top + prop_z) / 2, ob_top - prop_z
+    ob_izz = r.outboard_mass * (0.14 ** 2 + 0.12 ** 2) / 12   # 모터 머리 크기 기준
+    ob_ixy = r.outboard_mass * ob_len ** 2 / 12
+    ob_inertia = [ob_ixy, ob_ixy, ob_izz]
 
     return f"""
 <mujoco model="airway_tow">
@@ -263,7 +270,7 @@ def build_mjcf(cfg: TowConfig) -> str:
     <body name="robot" pos="{_fmt(lay.robot_pos)}">
       <freejoint name="robot_free"/>
       <!-- 물리용 선체: 상자 (질량·충돌). 그룹 3이라 화면에는 안 보임 -->
-      <geom name="hull" type="box" size="{_fmt(rs)}" mass="{r.mass}" rgba="1 0.45 0.05 0.3" group="3"/>
+      <geom name="hull" type="box" size="{_fmt(rs)}" mass="{r.mass - r.outboard_mass:.4g}" rgba="1 0.45 0.05 0.3" group="3"/>
       <!-- 보이는 모양: 작은 구조정 -->
       <geom name="boat_hull" type="mesh" mesh="boat_hull" material="hull" {_VIS}/>
       <geom name="rub_rail_l" type="box" size="{0.475 * sx:.4g} 0.014 0.022" pos="{-0.225 * sx:.4g} {rs[1]:.4g} {top - 0.025:.4g}"
@@ -278,12 +285,18 @@ def build_mjcf(cfg: TowConfig) -> str:
             rgba="0.1 0.2 0.3 1" {_VIS}/>
       <geom name="tow_post" type="cylinder" size="0.025" fromto="{post[0]:.4g} 0 {top:.4g} {_fmt(post)}"
             rgba="1 0.85 0.1 1" {_VIS}/>
-      <geom name="motor_cowl" type="box" size="0.07 0.06 0.09" pos="{-rs[0] - 0.06:.4g} 0 {top + 0.06:.4g}"
-            rgba="0.2 0.2 0.22 1" {_VIS}/>
-      <geom name="motor_shaft" type="cylinder" size="0.022" fromto="{-rs[0] - 0.06:.4g} 0 {top:.4g} {-rs[0] - 0.06:.4g} 0 {-rs[2] - 0.05:.4g}"
-            rgba="0.25 0.25 0.27 1" {_VIS}/>
-      <geom name="propeller" type="cylinder" size="0.07 0.012" pos="{-rs[0] - 0.09:.4g} 0 {-rs[2] - 0.05:.4g}" euler="0 1.5708 0"
-            rgba="0.75 0.75 0.78 1" {_VIS}/>
+      <!-- 선외기: 세로축(steer 관절)으로 좌우로 돌며 방향을 바꿈. 추진력은 프로펠러 위치에서 선외기 앞쪽으로 -->
+      <body name="outboard" pos="{-rs[0] - 0.06:.4g} 0 0">
+        <joint name="steer" type="hinge" axis="0 0 1" range="{-r.max_rudder:.4g} {r.max_rudder:.4g}" limited="true"/>
+        <inertial pos="0 0 {ob_zc:.4g}" mass="{r.outboard_mass:.4g}" diaginertia="{_fmt(ob_inertia)}"/>
+        <geom name="motor_cowl" type="box" size="0.07 0.06 0.09" pos="0 0 {top + 0.06:.4g}"
+              rgba="0.2 0.2 0.22 1" {_VIS}/>
+        <geom name="motor_shaft" type="cylinder" size="0.022" fromto="0 0 {top:.4g} 0 0 {prop_z:.4g}"
+              rgba="0.25 0.25 0.27 1" {_VIS}/>
+        <geom name="propeller" type="cylinder" size="0.07 0.012" pos="-0.03 0 {prop_z:.4g}" euler="0 1.5708 0"
+              rgba="0.75 0.75 0.78 1" {_VIS}/>
+        <site name="thruster" pos="0 0 {prop_z:.4g}" size="0.04" rgba="0.2 0.2 0.2 1" group="3"/>
+      </body>
       <geom name="cam_mast" type="cylinder" size="0.015" fromto="{0.48 * sx:.4g} 0 {top:.4g} {0.48 * sx:.4g} 0 {top + 0.14:.4g}"
             rgba="0.2 0.2 0.2 1" {_VIS}/>
       <geom name="thermal_cam" type="box" size="0.04 0.05 0.035" pos="{0.48 * sx:.4g} 0 {top + 0.17:.4g}"
@@ -295,7 +308,6 @@ def build_mjcf(cfg: TowConfig) -> str:
       <site name="imu" pos="0 0 0" size="0.03"/>
       <site name="tow_point" pos="{_fmt(r.tow_point)}" size="0.04" rgba="1 1 0 1" group="3"/>
       <site name="tow_post_top" pos="{_fmt(post)}" size="0.03" rgba="1 0.85 0.1 1" group="3"/>
-      <site name="thruster" pos="{-rs[0]:.4g} 0 {-rs[2]:.4g}" size="0.04" rgba="0.2 0.2 0.2 1" group="3"/>
     </body>
 
     <body name="torso" pos="{_fmt(lay.torso_pos)}">
@@ -339,6 +351,14 @@ def build_mjcf(cfg: TowConfig) -> str:
       <site site="tube_free_attach"/>
     </spatial>
   </tendon>
+
+  <actuator>
+    <!-- 추진 모터: 추진기 site의 앞(x)방향으로 힘. ctrl = 목표 추진력 [N], filterexact = 엔진 반응 지연 -->
+    <general name="thrust" site="thruster" gear="1 0 0 0 0 0" dyntype="filterexact"
+             dynprm="{max(r.thrust_tau, 1e-6):.6g}" gainprm="1" biastype="none"/>
+    <!-- 조향 서보: ctrl = 목표 조향각 [rad] -->
+    <position name="steer" joint="steer" kp="{r.steer_kp:.6g}" dampratio="1" timeconst="{max(r.steer_tau, 0):.6g}"/>
+  </actuator>
 
   <sensor>
     <accelerometer name="imu_acc" site="imu"/>

@@ -185,8 +185,36 @@ def test_visual_parts_do_not_affect_physics():
             continue
         assert m.geom_contype[i] == 0 and m.geom_conaffinity[i] == 0, name
     r = sim.cfg.robot
-    assert m.body_mass[sim.robot_id] == pytest.approx(r.mass)
-    assert m.body_inertia[sim.robot_id][0] == pytest.approx(r.mass * (r.width ** 2 + r.height ** 2) / 12)
+    # 로봇 전체 질량 = 선체 상자 + 선외기
+    assert m.body_subtreemass[sim.robot_id] == pytest.approx(r.mass)
+    hull = r.mass - r.outboard_mass
+    assert m.body_mass[sim.robot_id] == pytest.approx(hull)
+    assert m.body_inertia[sim.robot_id][0] == pytest.approx(hull * (r.width ** 2 + r.height ** 2) / 12)
+
+
+def test_thrust_motor_follows_command_with_lag():
+    """추진 모터(MuJoCo 구동기)는 명령을 thrust_tau 지연으로 따라감 (1 tau 뒤 약 63%)"""
+    cfg = flat_cfg()
+    sim = TowSim(cfg)
+    n = int(round(cfg.robot.thrust_tau * cfg.sim.control_hz))
+    for _ in range(n):
+        sim.step(1.0, 0.0)
+    assert sim.thrust_level == pytest.approx(1 - math.exp(-1), abs=0.03)
+    f = sim.data.actuator_force[sim.thrust_act]
+    # 힘은 스텝 시작 시점 값, thrust_level은 스텝 끝 값이라 한 스텝(4ms)만큼 차이 남
+    assert f == pytest.approx(sim.thrust_level * cfg.robot.max_thrust, rel=0.02)
+
+
+def test_outboard_steers_to_commanded_angle():
+    """조향 서보: rudder=1 이면 선외기가 -max_rudder 까지 돌고, 0이면 다시 가운데로"""
+    cfg = flat_cfg()
+    sim = TowSim(cfg)
+    for _ in range(50):
+        obs = sim.step(0.5, 1.0)
+    assert obs["steer_angle"] == pytest.approx(-cfg.robot.max_rudder, abs=0.02)
+    for _ in range(50):
+        obs = sim.step(0.5, 0.0)
+    assert obs["steer_angle"] == pytest.approx(0.0, abs=0.02)
 
 
 def test_rescue_tube_moves_from_deck_to_water_to_victim():

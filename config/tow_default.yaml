@@ -28,7 +28,10 @@ robot:                   # 구조 로봇 (소형 무인 구조정)
   max_thrust: 300.0      # 최대 추진력 [N]
   max_reverse: 0.3       # 후진은 최대 추진력의 30%까지
   thrust_tau: 0.4        # 엔진 반응 지연 (1차 지연 시정수) [s]
-  max_rudder: 0.6        # 최대 조향각 [rad]
+  max_rudder: 0.6        # 최대 조향각 [rad] (선외기가 좌우로 돌 수 있는 한계)
+  outboard_mass: 3.0     # 선외기 질량 [kg] (mass 안에 포함)
+  steer_kp: 40.0         # 조향 서보 강성 [N·m/rad]
+  steer_tau: 0.1         # 조향 서보 반응 지연 [s]
   # 물 저항 (몸체 좌표계 x=앞뒤, y=좌우, z=위아래)
   drag_lin: [5.0, 60.0, 400.0]     # 선형 [N/(m/s)]
   drag_quad: [12.0, 150.0, 200.0]  # 2차 [N/(m/s)^2]
