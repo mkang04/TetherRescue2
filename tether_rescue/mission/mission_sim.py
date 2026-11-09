@@ -42,6 +42,20 @@ class MissionMetrics:
     false_alarms: int
 
 
+_PHYS_GROUP = np.array([0, 0, 0, 1, 0, 0], dtype=np.uint8)    # 물리용 상자(그룹 3)만 광선에 맞음
+
+
+def THERMAL_CAM_LOCAL(cfg):
+    """열화상 카메라 위치 (로봇 몸체 좌표, scene.py의 thermal_cam과 같은 곳)"""
+    sx = cfg.robot.length / 1.4
+    return [0.48 * sx + 0.045, 0.0, cfg.robot.height / 2 + 0.17]
+
+
+def SONAR_LOCAL(cfg):
+    """소나 위치: 뱃머리 쪽 선체 바닥 아래"""
+    return [0.4 * cfg.robot.length / 2, 0.0, -cfg.robot.height / 2 - 0.05]
+
+
 class MissionSim(TowSim):
     """mode="mission": 전체 구조 임무 / mode="tow": 기존 끌고 오기만 (같은 3D 모델을 공유, reset 때 전환)."""
 
@@ -87,6 +101,7 @@ class MissionSim(TowSim):
         obs = super().reset(seed)
         mc = self.cfg.mission
         self.boarding = BoardingRisk(self)
+        self._ray_geom = np.array([-1], dtype=np.int32)
         self.climbed = False                       # 사람이 배에 매달려 구조 실패
         self.gps = GpsModel(mc, self.mrng)
         self.thermal = ThermalCamera(self.cfg.thermal, self.mrng)
@@ -139,11 +154,14 @@ class MissionSim(TowSim):
 
         hs = self.waves.wave_height
         head_visible = self._last_obs["mouth_clearance"] > -0.08     # 얼굴이 조금이라도 보이면
-        dets = self.thermal.sense(t, robot_xy, yaw, self.data.xipos[self.head_id][:2], head_visible, hs)
-        dets += self.sonar.sense(t, robot_xy, yaw, self._torso_xy(), hs)
+        head = self.data.xipos[self.head_id]
+        dets = self.thermal.sense(t, robot_xy, yaw, head[:2], head_visible, hs,
+                                  line_of_sight=self._thermal_line_of_sight(head))
+        dets += self.sonar.sense_rays(t, yaw, self._sonar_cast, hs)
         self.recent_dets = [d for d in self.recent_dets if t - d.t < 2.0] + dets
 
         prev_phase = self.brain.phase
+        self.brain.tube_in_hand = self.handoff.has_tube
         cmd = self.brain.decide(t, gps_xy, yaw, self._last_obs["robot_speed"], dets)
         self.command = cmd
         if prev_phase != self.brain.phase and self.brain.phase in ("SEARCH", APPROACH) \
@@ -181,6 +199,35 @@ class MissionSim(TowSim):
                 rud = -rud           # 뒤로 밀 때는 추진기 꺾는 방향이 반대로 작용
         obs = self.step(thr, rud, target_speed=cmd.speed_ref)
         return obs
+
+    # ---------------------------------------------------------------- 센서 기하 (실제 위치로 계산)
+    def _robot_point(self, local) -> np.ndarray:
+        d = self.data
+        return d.xpos[self.robot_id] + d.xmat[self.robot_id].reshape(3, 3) @ np.asarray(local, float)
+
+    def _thermal_line_of_sight(self, head) -> bool:
+        """열화상 카메라(돛대 꼭대기) ~ 머리 꼭대기 사이를 파도가 가리는지. 선을 따라 점을 찍어 물 높이와 비교."""
+        cam = self._robot_point(THERMAL_CAM_LOCAL(self.cfg))
+        top = head + np.array([0.0, 0.0, 0.7 * self.cfg.human.head_radius])
+        s = np.linspace(0.05, 0.95, 24)[:, None]
+        pts = cam + s * (top - cam)
+        eta = self.waves.height(pts[:, 0], pts[:, 1], self.data.time)
+        return bool(np.all(eta < pts[:, 2]))
+
+    def _sonar_cast(self, az: float, el: float):
+        """소나 빔 하나: 로봇 앞쪽 기준 방위각 az, 앙각 el [rad]. → (맞은 거리 또는 None, 사람 몸인지)"""
+        d = self.data
+        R = d.xmat[self.robot_id].reshape(3, 3)
+        fwd = R[:, 0].copy()
+        fwd[2] = 0.0
+        fwd /= max(np.linalg.norm(fwd), 1e-9)
+        left = np.array([-fwd[1], fwd[0], 0.0])
+        v = math.cos(el) * (math.cos(az) * fwd + math.sin(az) * left) + np.array([0.0, 0.0, math.sin(el)])
+        origin = self._robot_point(SONAR_LOCAL(self.cfg))
+        dist = mujoco.mj_ray(self.model, d, origin, v, _PHYS_GROUP, 1, self.robot_id, self._ray_geom)
+        if dist < 0:
+            return None, False
+        return float(dist), int(self.model.geom_bodyid[self._ray_geom[0]]) in (self.torso_id, self.head_id)
 
     def _extra_forces(self, wrench: np.ndarray):
         if getattr(self, "boarding", None) is not None:

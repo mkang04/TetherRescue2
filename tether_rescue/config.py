@@ -30,6 +30,7 @@ class OceanConfig:
     direction: float = 0.0
     spread: float = 0.5
     current: list[float] = field(default_factory=lambda: [0.0, 0.0])
+    added_mass_scale: float = 1.0   # 부가질량 배율 (0 = 끔, 1 = 평판 공식 그대로)
 
 
 @dataclass
@@ -45,6 +46,8 @@ class RobotConfig:
     outboard_mass: float = 3.0   # 선외기(모터 머리·축·프로펠러) 질량 [kg], 전체 mass 안에 포함
     steer_kp: float = 40.0       # 조향 서보 강성 [N·m/rad]
     steer_tau: float = 0.1       # 조향 서보 반응 지연 (1차 지연 시정수) [s]
+    prop_radius: float = 0.07    # 프로펠러 반지름 [m] (물 밖으로 나온 비율만큼 추력 감소)
+    thrust_zero_speed: float = 5.0  # 프로펠러 전진 속도가 이 값이면 추력 0 [m/s] (속도에 따른 추력 감소)
     drag_lin: list[float] = field(default_factory=lambda: [5.0, 60.0, 400.0])
     drag_quad: list[float] = field(default_factory=lambda: [12.0, 150.0, 200.0])
     ang_drag: list[float] = field(default_factory=lambda: [8.0, 8.0, 6.0])
@@ -122,8 +125,8 @@ class MissionConfig:
     approach_speed_max: float = 1.0
     handoff_standoff: float = 3.0      # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m] (이 거리를 유지)
     tube_line_start: float = 0.9       # 처음 내밀 때 뱃머리 ~ 튜브 중심 거리 [m]
-    tube_line_max: float = 2.6         # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
-    tube_payout_speed: float = 0.12    # 줄 푸는 빠르기 [m/s]
+    tube_line_max: float = 3.6         # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
+    tube_payout_speed: float = 0.2     # 줄 푸는 빠르기 [m/s]
     tube_payout_delay: float = 2.0     # 내민 뒤 이만큼 기다렸다가 줄을 풀기 시작 [s]
     handoff_timeout: float = 20.0     # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s]
     capture_speed: float = 0.6
@@ -159,6 +162,15 @@ class BridgeConfig:
 
 
 @dataclass
+class ImuConfig:
+    """IMU 잡음 (MuJoCo는 센서 noise 속성을 적용하지 않으므로 파이썬에서 더함). 기본값: MPU-6050 데이터시트"""
+    acc_noise_density: float = 400e-6   # 가속도 잡음 밀도 [g/√Hz]
+    gyro_noise_density: float = 0.005   # 자이로 잡음 밀도 [deg/s/√Hz]
+    bandwidth: float = 25.0             # 측정 대역폭 [Hz] (조종 박자 50 Hz의 절반)
+    gyro_bias: float = 0.1              # 켤 때마다 정해지는 자이로 고정 오차 표준편차 [deg/s]
+
+
+@dataclass
 class TowConfig:
     sim: SimConfig = field(default_factory=SimConfig)
     ocean: OceanConfig = field(default_factory=OceanConfig)
@@ -169,6 +181,7 @@ class TowConfig:
     mission: MissionConfig = field(default_factory=MissionConfig)
     thermal: ThermalConfig = field(default_factory=ThermalConfig)
     sonar: SonarConfig = field(default_factory=SonarConfig)
+    imu: ImuConfig = field(default_factory=ImuConfig)
     ros_bridge: BridgeConfig = field(default_factory=BridgeConfig)
 
     def to_dict(self) -> dict[str, Any]:

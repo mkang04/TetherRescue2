@@ -90,3 +90,18 @@ class WaveField:
         out[..., 1] += np.sum(c * self.dir_y, axis=-1)
         out[..., 2] += np.sum(aw * np.sin(arg), axis=-1)
         return out
+
+    def acceleration(self, pos, t: float):
+        """물 입자 가속도 [m/s^2] (파도 궤도 운동, 해류는 일정해서 0). pos: (..., 3)"""
+        pos = np.asarray(pos, dtype=float)
+        out = np.zeros(pos.shape)
+        if self.amp.size == 0:
+            return out
+        arg = self._arg(pos[..., 0], pos[..., 1], t)
+        z = np.minimum(pos[..., 2], 0.0)[..., None]
+        aw2 = self.amp * self.omega ** 2 * np.exp(self.k * z)     # velocity()를 시간으로 미분
+        s = aw2 * np.sin(arg)
+        out[..., 0] = np.sum(s * self.dir_x, axis=-1)
+        out[..., 1] = np.sum(s * self.dir_y, axis=-1)
+        out[..., 2] = -np.sum(aw2 * np.cos(arg), axis=-1)
+        return out

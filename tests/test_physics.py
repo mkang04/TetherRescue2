@@ -78,14 +78,14 @@ def test_human_mouth_above_water_at_rest():
 
 
 def test_robot_rights_itself_after_tilt():
-    """30도 기울여 놓으면 오뚝이처럼 다시 선다"""
+    """30도 기울여 놓으면 오뚝이처럼 다시 선다 (부가질량 때문에 롤이 무거워 10초 안에)"""
     sim = TowSim(flat_cfg())
     q = sim.data.qpos
     half = math.radians(30) / 2
     q[3:7] = [math.cos(half), math.sin(half), 0, 0]   # roll 30도
     mujoco.mj_forward(sim.model, sim.data)
     assert sim.robot_tilt() > math.radians(25)
-    for _ in range(250):
+    for _ in range(500):
         sim.step(0.0, 0.0)
     assert sim.robot_tilt() < math.radians(3)
 
@@ -201,8 +201,8 @@ def test_thrust_motor_follows_command_with_lag():
         sim.step(1.0, 0.0)
     assert sim.thrust_level == pytest.approx(1 - math.exp(-1), abs=0.03)
     f = sim.data.actuator_force[sim.thrust_act]
-    # 힘은 스텝 시작 시점 값, thrust_level은 스텝 끝 값이라 한 스텝(4ms)만큼 차이 남
-    assert f == pytest.approx(sim.thrust_level * cfg.robot.max_thrust, rel=0.02)
+    # 실제 추력 = 엔진 세기 × 프로펠러 효율. 힘은 스텝 시작 시점, thrust_level은 끝 값이라 한 스텝만큼 차이 남
+    assert f == pytest.approx(sim.thrust_level * cfg.robot.max_thrust * sim.prop_factor, rel=0.02)
 
 
 def test_outboard_steers_to_commanded_angle():

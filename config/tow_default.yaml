@@ -19,6 +19,7 @@ ocean:
   direction: 0.0         # 주 파향 [rad] (0 = +x 방향으로 진행)
   spread: 0.5            # 파향 퍼짐 [rad]
   current: [0.0, 0.0]    # 해류 [m/s] (x, y)
+  added_mass_scale: 1.0  # 부가질량 배율 (0 = 끔, 1 = 평판 공식 그대로) — ocean/added_mass.py
 
 robot:                   # 구조 로봇 (소형 무인 구조정)
   length: 1.4
@@ -32,6 +33,8 @@ robot:                   # 구조 로봇 (소형 무인 구조정)
   outboard_mass: 3.0     # 선외기 질량 [kg] (mass 안에 포함)
   steer_kp: 40.0         # 조향 서보 강성 [N·m/rad]
   steer_tau: 0.1         # 조향 서보 반응 지연 [s]
+  prop_radius: 0.07      # 프로펠러 반지름 [m] (물 밖으로 나온 비율만큼 추력이 줄어듦)
+  thrust_zero_speed: 5.0 # 프로펠러가 물을 이 속도로 지나가면 추력 0 [m/s] (가정값, 빨라질수록 추력 감소)
   # 물 저항 (몸체 좌표계 x=앞뒤, y=좌우, z=위아래)
   drag_lin: [5.0, 60.0, 400.0]     # 선형 [N/(m/s)]
   drag_quad: [12.0, 150.0, 200.0]  # 2차 [N/(m/s)^2]
@@ -108,8 +111,9 @@ mission:
   approach_speed_max: 1.0  # 마무리 접근 최대 속도 [m/s]
   handoff_standoff: 3.0    # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m] (다가가지 않고 이 거리 유지)
   tube_line_start: 0.9     # 처음 내밀 때 뱃머리 ~ 튜브 중심 거리 [m]
-  tube_line_max: 2.6       # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
-  tube_payout_speed: 0.12  # 줄 푸는 빠르기 [m/s]
+  tube_line_max: 3.6       # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
+                           # (소나는 몸의 가까운 끝까지 거리를 재서 실제보다 가깝게 추정함 → 여유 있게)
+  tube_payout_speed: 0.2   # 줄 푸는 빠르기 [m/s]
   tube_payout_delay: 2.0   # 내민 뒤 이만큼 기다렸다가 줄을 풀기 시작 [s]
   handoff_timeout: 20.0    # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s] (줄 다 풀기 + 여유)
   capture_speed: 0.6       # 로봇이 이 속도보다 느릴 때만 사람이 튜브를 잡음 [m/s]
@@ -130,6 +134,12 @@ sonar:                     # 가상 소나 (물속 몸통 감지, 거리+방향)
   range_noise: 0.3         # [m]
   bearing_noise: 3.0       # [도]
   false_rate: 0.3          # 핑 1번당 가짜 탐지 평균 개수 (파고 1m 기준, 파고에 비례)
+
+imu:                       # IMU 잡음 (MuJoCo는 센서 noise를 적용하지 않아 파이썬에서 더함). 기본값 = MPU-6050 데이터시트
+  acc_noise_density: 0.0004  # 가속도 잡음 밀도 [g/√Hz] (400 µg/√Hz)
+  gyro_noise_density: 0.005  # 자이로 잡음 밀도 [deg/s/√Hz]
+  bandwidth: 25.0            # 측정 대역폭 [Hz]
+  gyro_bias: 0.1             # 켤 때마다 정해지는 자이로 고정 오차 [deg/s] (가정값)
 
 ros_bridge:                # ROS2 브리지(rviz2)와 UDP로 주고받기
   host: auto               # auto = Windows에서는 WSL 주소 자동 찾기, 그 외는 127.0.0.1

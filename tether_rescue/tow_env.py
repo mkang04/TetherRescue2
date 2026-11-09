@@ -21,6 +21,7 @@ import numpy as np
 from .config import TowConfig
 from .handoff import TubeHandoff
 from .ocean.hydro import HydroSpec, HydroSystem, box_blocks, sphere_blocks
+from .ocean.added_mass import AddedMass, AddedMassSpec
 from .ocean.waves import WaveField
 from .scene import (WATER_CENTER_X, WATER_ELEV, WATER_HALF_X, WATER_HALF_Y, WATER_NCOL,
                     WATER_NROW, build_mjcf)
@@ -104,6 +105,12 @@ class TowSim:
             HydroSpec("head", *sphere_blocks(h.head_radius), [0.0] * 3, [h.head_drag_quad] * 3, [0.5] * 3),
         ]
         self.hydro = HydroSystem(m, specs, oc.rho, oc.g)
+        # 부가질량: 로봇 선체, 사람 몸통 (머리는 작아서 뺌). 순서는 hydro와 같게 (sub 비율을 같이 씀)
+        self.added_mass = AddedMass(m, [
+            AddedMassSpec("robot", "robot_free", [r.length, r.width, r.height], r.mass),
+            AddedMassSpec("torso", "torso_free", h.torso_size, h.torso_mass + h.head_mass),
+        ], oc.rho, oc.added_mass_scale)
+        self._prop_v6 = np.zeros(6)
 
         self.tether = Tether(cfg.tether)
         self.waves = WaveField(oc, cfg.sim.seed)
@@ -125,6 +132,10 @@ class TowSim:
         mujoco.mj_forward(self.model, self.data)
         self.throttle = 0.0
         self.thrust_level = 0.0   # 실제 엔진 세기 (throttle을 늦게 따라감)
+        self.prop_factor = 1.0    # 프로펠러 효율 (물 밖으로 나온 정도 × 속도에 따른 감소)
+        # IMU 잡음: 시드마다 같은 잡음, 켤 때마다 정해지는 자이로 고정 오차
+        self.imu_rng = np.random.default_rng(20_000 + int(self.cfg.sim.seed))
+        self.gyro_bias = self.imu_rng.normal(0.0, math.radians(self.cfg.imu.gyro_bias), 3)
         self.rudder = 0.0
         self.outcome = Outcome()
         self.log = StepLog()
@@ -190,6 +201,23 @@ class TowSim:
         wrench[body, 4] += r[2] * force[0] - r[0] * force[2]
         wrench[body, 5] += r[0] * force[1] - r[1] * force[0]
 
+    def _prop_efficiency(self, t: float) -> float:
+        """프로펠러 효율 0~1 = 잠긴 비율 × 속도 감소.
+        - 잠긴 비율: 프로펠러 원판이 물 밖으로 나온 만큼 줄어듦 (파도에 선미가 들리면 헛돎)
+        - 속도 감소: 프로펠러가 물을 지나가는 속도 u가 빠를수록 줄어듦, T = T0·(1 − u/u0)
+          (프로펠러 단독 성능 곡선을 직선으로 본 것. 뒤로 밀 때는 뒤쪽 속도 기준)"""
+        m, d, r = self.model, self.data, self.cfg.robot
+        p = d.site_xpos[self.thruster_site]
+        depth = float(self.waves.height(p[0], p[1], t)) - p[2]          # 프로펠러 중심의 물 깊이
+        rad = max(r.prop_radius, 1e-3)
+        immersed = min(1.0, max(0.0, (depth + rad) / (2 * rad)))
+        mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_SITE, self.thruster_site, self._prop_v6, 0)
+        axis = d.site_xmat[self.thruster_site].reshape(3, 3)[:, 0]      # 추력 방향
+        u = float((self._prop_v6[3:] - self.waves.velocity(p, t)) @ axis)
+        sign = 1.0 if d.act[self._thrust_actadr] >= 0 else -1.0
+        speed = 1.0 if r.thrust_zero_speed <= 0 else min(1.0, max(0.0, 1.0 - sign * u / r.thrust_zero_speed))
+        return immersed * speed
+
     def _extra_forces(self, wrench: np.ndarray):
         """하위 클래스가 힘을 더 넣고 싶을 때 덮어씀 (구조 임무: 사람이 배에 매달리는 힘)."""
 
@@ -203,11 +231,16 @@ class TowSim:
         res = self.hydro.compute(m, d, self.waves, t)
         wrench[self.hydro.body_ids, :3] += res.force
         wrench[self.hydro.body_ids, 3:] += res.torque
+        self.added_mass.scale = cfg.ocean.added_mass_scale
+        self.added_mass.apply(m, d, res.submerged, self.waves, t, wrench)
 
         # 추진·조향: MuJoCo 구동기에 명령만 넣음 (힘 계산은 MuJoCo가 함)
         # 추진 모터: 목표 추진력 [N]. 엔진 반응 지연은 구동기의 filterexact가 처리 (패널에서 바꿔도 반영)
         m.actuator_dynprm[self.thrust_act, 0] = max(cfg.robot.thrust_tau, 1e-6)
         d.ctrl[self.thrust_act] = self.throttle * cfg.robot.max_thrust
+        # 실제 추력 = 엔진 세기 × 프로펠러 효율 (물 밖으로 나오면 줄고, 빨리 달릴수록 줄어듦)
+        self.prop_factor = self._prop_efficiency(t)
+        m.actuator_gainprm[self.thrust_act, 0] = self.prop_factor
         # 조향 서보: rudder > 0 = 왼쪽(반시계)으로 돌기. 선외기를 시계 방향(음수 각)으로 돌려야
         # 선미가 오른쪽으로 밀리고 뱃머리가 왼쪽으로 돕니다.
         d.ctrl[self.steer_act] = -self.rudder * cfg.robot.max_rudder
@@ -258,7 +291,6 @@ class TowSim:
         mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_BODY, self.robot_id, self._v6, 0)
         forward = d.xmat[self.robot_id].reshape(3, 3)[:, 0]
         robot_speed = float(self._v6[3:] @ forward)   # 앞쪽 속도 [m/s]
-        yaw_rate = float(d.sensordata[self._gyro_adr + 2])
 
         # 사람 속도: 물에 대한 수평 상대 속도 (선수파 계산용)
         mujoco.mj_objectVelocity(m, d, mujoco.mjtObj.mjOBJ_BODY, self.torso_id, self._v6, 0)
@@ -271,8 +303,12 @@ class TowSim:
         bow_rise = cfg.human.bow_wave_coef * human_speed**2 / (2 * cfg.ocean.g)
         clearance = float(mouth[2] - (water_z + bow_rise))
         ts = self.tether.state
-        acc = d.sensordata[self._acc_adr:self._acc_adr + 3]
-        gyro = d.sensordata[self._gyro_adr:self._gyro_adr + 3]
+        # IMU: MuJoCo 값 + 잡음 (MuJoCo는 센서 noise 속성을 적용하지 않음). σ = 잡음 밀도 × √대역폭
+        im = cfg.imu
+        bw = math.sqrt(max(im.bandwidth, 0.0))
+        acc = d.sensordata[self._acc_adr:self._acc_adr + 3] +             self.imu_rng.normal(0.0, im.acc_noise_density * cfg.ocean.g * bw, 3)
+        gyro = d.sensordata[self._gyro_adr:self._gyro_adr + 3] + self.gyro_bias +             self.imu_rng.normal(0.0, math.radians(im.gyro_noise_density) * bw, 3)
+        yaw_rate = float(gyro[2])
 
         return {
             "t": self.time,
@@ -280,6 +316,8 @@ class TowSim:
             "acc_x": float(acc[0]), "acc_y": float(acc[1]), "acc_z": float(acc[2]),
             "throttle": self.throttle, "rudder": self.rudder,
             "thrust_level": self.thrust_level,   # 실제 엔진 세기 (최대 추진력 대비 비율)
+            "thrust_force": float(d.actuator_force[self.thrust_act]),   # 실제 추력 [N] (프로펠러 효율 반영)
+            "prop_factor": self.prop_factor,     # 프로펠러 효율 0~1 (물 밖 노출 × 속도)
             "steer_angle": float(d.qpos[self.steer_qadr]),   # 실제 선외기 조향각 [rad] (+ = 반시계)
             "gyro_x": float(gyro[0]), "gyro_y": float(gyro[1]), "gyro_z": float(gyro[2]),
             "yaw_rate": yaw_rate,

@@ -95,6 +95,27 @@ def test_tracker_thermal_and_sonar_agree_confirms_fast():
     assert tr.confirmed
 
 
+def test_tracker_corrects_wrong_range_when_sonar_agrees_with_thermal():
+    """가짜 반사(20 m)로 확인된 뒤, 열화상과 같은 방향의 진짜 소나(6 m)가 오면 그 거리로 바로잡음"""
+    tr = TargetTracker()
+    tr.update(0.0, [_sonar(0.0, 20, 0, real=False)], (0, 0), 0.0)
+    tr.update(0.1, [Detection("thermal", 0.1, 0.0, None, True)], (0, 0), 0.0)
+    assert tr.confirmed and tr.est[0] == pytest.approx(20.0)
+    tr.update(0.2, [Detection("thermal", 0.2, 0.0, None, True), _sonar(0.2, 6, 0.2)], (0, 0), 0.0)
+    assert np.linalg.norm(tr.est - [6, 0.2]) < 0.5
+
+
+def test_robot_stays_put_without_goal_in_waves():
+    """좌표를 안 주면 엔진 0 → 파도 속에서도 거의 제자리 (부가질량 힘이 쌓여 떠밀리던 버그 방지)"""
+    sim = MissionSim(load_config(overrides={"ocean": {"wave_height": 1.0}}))
+    sim.reset(1)
+    p0 = sim.data.xipos[sim.robot_id][:2].copy()
+    for _ in range(int(30 * sim.cfg.sim.control_hz)):
+        sim.step_auto()
+    assert sim.brain.phase == "WAIT_GOAL"
+    assert np.linalg.norm(sim.data.xipos[sim.robot_id][:2] - p0) < 3.0
+
+
 def test_square_spiral_expands():
     pts = square_spiral((0, 0), 5.0, 8)
     assert np.allclose(pts[0], [5, 0]) and np.allclose(pts[1], [5, 5]) and np.allclose(pts[2], [-5, 5])

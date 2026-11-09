@@ -59,6 +59,7 @@ class TargetTracker:
 
     - 소나 탐지 3번이 3m 안에서 겹치면 '확인' (가짜 탐지는 매번 다른 곳에 생기므로 걸러짐)
     - 열화상 방향과 소나 후보 방향이 6° 안으로 맞으면 바로 '확인' (두 센서가 동의)
+      확인 후에도 이렇게 맞는 소나 탐지가 오면 그 거리로 바로잡음 (처음 거리가 가짜 반사였을 때)
     - 신고 좌표에서 너무 먼 탐지는 후보로 받지 않음 (gate)
     - 확인 후에도 후보를 계속 모으고, 지금 추정이 한동안 갱신 안 되는데 다른 후보가 확인 수준이 되면 갈아탐
     - 오래 감지가 없으면 '놓침'
@@ -110,6 +111,12 @@ class TargetTracker:
                 if self.confirmed and self.est is not None and np.linalg.norm(pos - self.est) < 4.0:
                     self.est = 0.6 * self.est + 0.4 * pos
                     self.last_t = t
+                    continue
+                # 확인 후에도 열화상 방향과 맞는 소나 거리가 오면 그 거리로 바로잡음 (두 센서가 동의).
+                # 열화상은 방향만 갱신해서, 처음 확인한 거리가 틀렸으면(가짜 반사) 계속 틀린 채 남기 때문
+                if self.confirmed and self._in_gate(pos) and t - self.thermal_t < 1.0 \
+                        and abs(_wrap(bw - self.thermal_bearing_world)) < math.radians(6):
+                    self._confirm(pos, t)
                     continue
                 if self._in_gate(pos):
                     self._add_candidate(pos, t)
@@ -170,6 +177,7 @@ class MissionController:
         self.fail_reason: str | None = None
         self.handoff_t: float | None = None      # 튜브 건네기 시작 시각
         self.grabbed_t: float | None = None      # 사람이 튜브를 잡은 시각
+        self.tube_in_hand = False                # 사람이 튜브를 잡는 중 (시뮬레이터가 알려 줌, 줄 장력으로 알 수 있음)
         self.standoff = self.cfg.handoff_standoff
         self.tracker.reset()
         self.tracker.lost_time = self.cfg.track_lost_time
@@ -209,7 +217,7 @@ class MissionController:
         if self.phase in (TRANSIT, SEARCH) and self.tracker.confirmed:
             self.phase = APPROACH                       # 직접 감지가 되면 GPS보다 감지를 믿음
         # 놓쳤으면 마지막 추정 위치 주변을 다시 탐색 (사람이 이미 튜브를 잡았으면 기다림)
-        if self.phase in (APPROACH, HANDOFF) and not self.tracker.confirmed and self.grabbed_t is None:
+        if self.phase in (APPROACH, HANDOFF) and not self.tracker.confirmed and self.grabbed_t is None                 and not self.tube_in_hand:
             self.phase = SEARCH
             center = self.tracker.est if self.tracker.est is not None else self.goal
             self.search_path, self.search_idx = square_spiral(center, c.search_leg), 0
@@ -263,7 +271,7 @@ class MissionController:
                 return Command(v, hdg)
 
             # HANDOFF: 거리를 지키며 튜브를 띄워 보내고 기다림 (가까워지면 뒤로 물러남)
-            if self.grabbed_t is None and t - self.handoff_t > c.handoff_timeout:
+            if self.grabbed_t is None and not self.tube_in_hand and t - self.handoff_t > c.handoff_timeout:
                 self.tracker.drop()                     # 한참 못 잡음 → 추정이 틀린 것 → 다시 탐색
                 self.handoff_t = None
                 return Command(0.0, yaw, hold=True)

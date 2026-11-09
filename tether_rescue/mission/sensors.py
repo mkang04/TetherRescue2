@@ -42,15 +42,21 @@ class ThermalCamera:
         self.cfg, self.rng = cfg, rng
         self.next_t = 0.0
 
-    def sense(self, t, robot_xy, robot_yaw, head_xy, head_visible: bool, wave_height: float) -> list[Detection]:
+    def sense(self, t, robot_xy, robot_yaw, head_xy, head_visible: bool, wave_height: float,
+              line_of_sight: bool | None = None) -> list[Detection]:
+        """line_of_sight: 카메라 ~ 머리 사이를 파도가 가리는지 실제로 계산한 결과 (구조 임무가 넘겨 줌).
+        None이면 예전처럼 파고에 따른 확률로 가려짐을 흉내 냄."""
         if t < self.next_t:
             return []
         self.next_t = t + 1.0 / self.cfg.rate
         r, b = _relative(robot_xy, robot_yaw, head_xy)
         half = math.radians(self.cfg.fov) / 2
-        if not head_visible or r > self.cfg.range or abs(b) > half:
+        if not head_visible or r > self.cfg.range or abs(b) > half or line_of_sight is False:
             return []
-        p = max(0.0, 1.0 - (r / self.cfg.range) ** 2) * math.exp(-0.6 * wave_height * r / 10.0)
+        # 멀수록 머리가 화면에서 작아져 놓치기 쉬움. 파도 가림은 line_of_sight가 있으면 그걸로 이미 판정
+        p = max(0.0, 1.0 - (r / self.cfg.range) ** 2)
+        if line_of_sight is None:
+            p *= math.exp(-0.6 * wave_height * r / 10.0)
         if self.rng.random() > p:
             return []
         b_meas = b + self.rng.normal(0.0, math.radians(self.cfg.bearing_noise))
@@ -77,6 +83,40 @@ class Sonar:
                     wrap_angle(b + self.rng.normal(0.0, math.radians(self.cfg.bearing_noise))),
                     max(0.1, r + self.rng.normal(0.0, self.cfg.range_noise)), True))
         # 가짜 탐지 (파도 거품·쓰레기). 파고에 비례.
+        n_false = self.rng.poisson(self.cfg.false_rate * max(wave_height, 0.0))
+        for _ in range(n_false):
+            out.append(Detection("sonar", t, float(self.rng.uniform(-half, half)),
+                                 float(self.rng.uniform(2.0, self.cfg.range)), False))
+        return out
+
+    def sense_rays(self, t, robot_yaw, cast, wave_height: float, elevations=(-3.0, 0.0, 3.0),
+                   beam_step: float = 2.0) -> list[Detection]:
+        """MuJoCo 광선(mj_ray)으로 실제 빔을 쏘는 소나.
+        cast(azimuth, elevation) → (거리 또는 None, 사람인지): 로봇 앞쪽 기준 각도 [rad]로 빔 하나를 쏨.
+        시야각 안에 beam_step 간격으로 빔을 쏴서, 사람(몸통)에 맞은 빔들의 가장 가까운 거리와 가운데 방향을 씀.
+        → 다른 물체에 가려지거나, 몸이 빔 사이로 빠지면 안 보임."""
+        if t < self.next_t:
+            return []
+        self.next_t = t + 1.0 / self.cfg.rate
+        out = []
+        half = math.radians(self.cfg.fov) / 2
+        n = max(1, int(round(self.cfg.fov / beam_step)))
+        hits = []
+        for i in range(n + 1):
+            az = -half + 2 * half * i / n
+            for el in elevations:
+                dist, is_target = cast(az, math.radians(el))
+                if dist is not None and is_target and dist <= self.cfg.range:
+                    hits.append((dist, az))
+        if hits:
+            r = min(h[0] for h in hits)
+            b = float(np.mean([h[1] for h in hits]))
+            p = 0.9 * max(0.0, 1.0 - (r / self.cfg.range) ** 2)     # 멀수록 반사 신호가 약해짐
+            if self.rng.random() < p:
+                out.append(Detection(
+                    "sonar", t,
+                    wrap_angle(b + self.rng.normal(0.0, math.radians(self.cfg.bearing_noise))),
+                    max(0.1, r + self.rng.normal(0.0, self.cfg.range_noise)), True))
         n_false = self.rng.poisson(self.cfg.false_rate * max(wave_height, 0.0))
         for _ in range(n_false):
             out.append(Detection("sonar", t, float(self.rng.uniform(-half, half)),
