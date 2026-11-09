@@ -15,7 +15,7 @@ from pathlib import Path
 LOG_NAME = "실험기록.csv"
 
 REASON_KO = {"success": "구조 성공", "tether_broken": "줄 끊어짐", "capsized": "로봇 뒤집힘", "timeout": "시간 초과",
-             "not_found": "못 찾음"}
+             "not_found": "못 찾음", "victim_climbed": "사람이 로봇에 매달림"}
 MODE_KO = {"mission": "구조 임무", "tow": "끌고 오기"}
 
 # (열 이름, 결과 dict 키, 소수 자리). 키가 None이면 따로 채움.
@@ -39,6 +39,7 @@ COLUMNS: list[tuple[str, str | None, int]] = [
     ("소나 거리(m)", "sonar_range", 0), ("소나 가짜 탐지", "sonar_false_rate", 1),
     ("이동 속도(m/s)", "transit_speed", 1), ("익수자 거리(m)", "victim_distance", 0),
     ("튜브 건넬 거리(m)", "handoff_standoff", 2), ("팔 닿는 거리(m)", "arm_reach", 2),
+    ("배 붙잡는 거리(m)", "grab_zone", 1),
 ]
 HEADER = [c[0] for c in COLUMNS]
 

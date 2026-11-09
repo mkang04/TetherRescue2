@@ -43,7 +43,7 @@ LOG_FIELDS = [
 @dataclass
 class Outcome:
     done: bool = False
-    reason: str = ""          # success / tether_broken / capsized / timeout
+    reason: str = ""          # success / tether_broken / capsized / timeout (구조 임무: + not_found / victim_climbed)
     success: bool = False
 
 
@@ -190,6 +190,9 @@ class TowSim:
         wrench[body, 4] += r[2] * force[0] - r[0] * force[2]
         wrench[body, 5] += r[0] * force[1] - r[1] * force[0]
 
+    def _extra_forces(self, wrench: np.ndarray):
+        """하위 클래스가 힘을 더 넣고 싶을 때 덮어씀 (구조 임무: 사람이 배에 매달리는 힘)."""
+
     def _physics_step(self):
         m, d, cfg = self.model, self.data, self.cfg
         t = d.time
@@ -219,6 +222,7 @@ class TowSim:
             self._add_point_force(wrench, self.torso_id, -f, p_h)
         self.last_tension = ts.tension
 
+        self._extra_forces(wrench)
         d.xfrc_applied[:] = wrench
         mujoco.mj_step(m, d)
         # 실제 엔진 세기 = 모터의 현재 추진력 / 최대 추진력

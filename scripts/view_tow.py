@@ -45,6 +45,7 @@ from tether_rescue.bridge.messages import build_state  # noqa: E402
 from tether_rescue.bridge.udp_link import SimLink  # noqa: E402
 from tether_rescue.config import load_config  # noqa: E402
 from tether_rescue.handoff import STATE_KO  # noqa: E402
+from tether_rescue.mission.boarding import STATE_KO as BOARD_KO  # noqa: E402
 from tether_rescue.metrics import compute_metrics  # noqa: E402
 from tether_rescue.mission.guidance import PHASE_KO  # noqa: E402
 from tether_rescue.mission.mission_sim import MissionSim  # noqa: E402
@@ -197,8 +198,13 @@ def make_overlay(vp, sim, cfg, obs, ui, plots, link, run_ko, play, phase, ratio,
         tube = STATE_KO.get(obs.get("tube"), "")
         if obs.get("tube") in ("OFFERED", "GRABBING"):
             tube += f"  (손까지 {obs['tube_reach']:.2f} / 팔 {cfg.human.arm_reach:.2f} m)"
-        rows += [("단계", PHASE_KO.get(phase, phase), I), ("구명튜브", tube),
-                 ("GPS 오차", f"{obs['gps_error']:.1f} m"), ("사람 ~ 기지", f"{obs['human_home_dist']:.1f} m")]
+        rows += [("단계", PHASE_KO.get(phase, phase), I), ("구명튜브", tube)]
+        if not obs.get("attached") and math.isfinite(obs.get("hull_gap", math.inf)) and phase in ("APPROACH", "HANDOFF"):
+            gap, zone = obs["hull_gap"], cfg.human.grab_zone
+            board = obs.get("boarding", "CALM")
+            txt = f"{gap:.1f} m  (위험 {zone:.1f} m 안)" if board == "CALM" else f"{gap:.1f} m  ← {BOARD_KO[board]}!"
+            rows.append(("사람 ~ 배", txt, B if board != "CALM" or gap < zone else (Y if gap < zone + 0.3 else G)))
+        rows += [("GPS 오차", f"{obs['gps_error']:.1f} m"), ("사람 ~ 기지", f"{obs['human_home_dist']:.1f} m")]
     else:
         rows += [("단계", "끌고 오기", I), ("이동 거리", f"{obs['progress']:.1f} / {cfg.sim.goal_distance:.0f} m")]
     if not sim.tether.attached:
@@ -281,6 +287,7 @@ def result_row(cfg, sim, mode: str, modified: bool) -> dict:
             "detect_time": mm.detect_time, "attach_time": mm.attach_time, "goal_error": mm.goal_error,
             "grab_time": None if (sim.grab_t is None or t0 is None) else sim.grab_t - t0,
             "handoff_standoff": cfg.mission.handoff_standoff, "arm_reach": cfg.human.arm_reach,
+            "grab_zone": cfg.human.grab_zone,
             "gps_error_at_arrival": mm.gps_error_at_arrival, "false_alarms": mm.false_alarms,
             "gps_error_sigma": cfg.mission.gps_error, "report_error": cfg.mission.report_error,
             "thermal_range": cfg.thermal.range, "thermal_fov": cfg.thermal.fov, "sonar_range": cfg.sonar.range,

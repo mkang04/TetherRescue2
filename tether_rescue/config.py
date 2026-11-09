@@ -74,6 +74,12 @@ class HumanConfig:
     grab_reaction: float = 0.8    # 튜브가 손 닿는 곳에 이만큼 있어야 잡으려고 함 [s]
     grab_time: float = 1.2        # 팔을 뻗어 잡는 데 걸리는 시간 [s]
     don_time: float = 3.0         # 잡은 튜브를 가슴(겨드랑이 아래)에 끼우는 시간 [s]
+    # 로봇에 매달리기 (튜브가 없는 사람이 배를 붙잡으려 함)
+    grab_zone: float = 1.5        # 어깨 ~ 선체 거리가 이 안이면 배를 향해 달려듦 [m]
+    climb_reaction: float = 1.0   # 위험 거리 안에 이만큼 있으면 달려들기 시작 [s]
+    lunge_force: float = 60.0     # 배를 향해 헤엄치는 힘 [N]
+    climb_force_ratio: float = 0.4  # 매달려 올라타려 할 때 뱃전을 누르는 힘 = 체중의 이 비율
+    climb_fail_time: float = 3.0  # 이만큼 매달려 있으면 구조 실패 [s]
 
 
 @dataclass
@@ -114,10 +120,12 @@ class MissionConfig:
     search_speed: float = 0.9
     search_timeout: float = 90.0
     approach_speed_max: float = 1.0
-    handoff_standoff: float = 1.6      # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m]
-    handoff_min_standoff: float = 1.15  # 못 잡으면 이 거리까지 조금씩 다가감 [m]
-    handoff_creep: float = 0.05        # 다가가는 빠르기 [m/s]
-    handoff_timeout: float = 15.0     # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s]
+    handoff_standoff: float = 3.0      # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m] (이 거리를 유지)
+    tube_line_start: float = 0.9       # 처음 내밀 때 뱃머리 ~ 튜브 중심 거리 [m]
+    tube_line_max: float = 2.6         # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
+    tube_payout_speed: float = 0.12    # 줄 푸는 빠르기 [m/s]
+    tube_payout_delay: float = 2.0     # 내민 뒤 이만큼 기다렸다가 줄을 풀기 시작 [s]
+    handoff_timeout: float = 20.0     # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s]
     capture_speed: float = 0.6
     track_lost_time: float = 8.0
     home_radius: float = 5.0

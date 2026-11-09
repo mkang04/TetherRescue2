@@ -22,6 +22,7 @@ import numpy as np
 from ..config import TowConfig
 from ..tow.pid import TowPIDController
 from ..tow_env import CAPSIZE_ANGLE, LOG_FIELDS, Outcome, TowSim
+from .boarding import CLINGING, LUNGING, BoardingRisk
 from .gps import GpsModel
 from .guidance import APPROACH, DONE, HANDOFF, MissionController
 from .sensors import Detection, Sonar, ThermalCamera
@@ -82,8 +83,11 @@ class MissionSim(TowSim):
         self.model.site_pos[gid][:2] = base          # 기지 표시: '목표선' 표시를 기지 위치로 옮김
 
     def reset(self, seed: int | None = None) -> dict:
+        self.boarding = None                       # 자리 잡기 동안은 매달리기 판정 안 함
         obs = super().reset(seed)
         mc = self.cfg.mission
+        self.boarding = BoardingRisk(self)
+        self.climbed = False                       # 사람이 배에 매달려 구조 실패
         self.gps = GpsModel(mc, self.mrng)
         self.thermal = ThermalCamera(self.cfg.thermal, self.mrng)
         self.sonar = Sonar(self.cfg.sonar, self.mrng)
@@ -151,7 +155,13 @@ class MissionSim(TowSim):
             self.handoff.offer()
         elif self.brain.phase != HANDOFF:
             self.handoff.retract()                       # 건네기를 그만두면 (다시 탐색 등) 튜브 회수
-        event = self.handoff.update(dt, self._last_obs["robot_speed"])
+        # 배로 달려들기 시작한 사람은 튜브 대신 배를 붙잡으려 함 (튜브 무시)
+        clinging = self.boarding.state == CLINGING
+        event = None if self.boarding.state in (LUNGING, CLINGING) else             self.handoff.update(dt, self._last_obs["robot_speed"])
+        # 튜브가 없는 사람은 가까이 온 배를 붙잡으려 함 (실제 어깨 ~ 선체 거리로 판정)
+        if not self.tether.attached and self.brain.phase in (APPROACH, HANDOFF) or clinging:
+            if self.boarding.update(dt, self.handoff.has_tube) == "failed":
+                self.climbed = True
         if event == "grabbed":
             self.grab_t = t
             self.brain.on_grabbed(t)
@@ -172,6 +182,15 @@ class MissionSim(TowSim):
         obs = self.step(thr, rud, target_speed=cmd.speed_ref)
         return obs
 
+    def _extra_forces(self, wrench: np.ndarray):
+        if getattr(self, "boarding", None) is not None:
+            self.boarding.add_forces(wrench, self._add_point_force)
+
+    def update_visuals(self):
+        super().update_visuals()
+        if getattr(self, "boarding", None) is not None:
+            self.boarding.apply_visuals()
+
     # ---------------------------------------------------------------- 관측·판정
     def _observe(self) -> dict:
         obs = super()._observe()
@@ -191,6 +210,8 @@ class MissionSim(TowSim):
             "attached": bool(self.tether.attached),
             "tube": self.handoff.state,
             "tube_reach": self.handoff.reach_dist,     # 가까운 어깨 ~ 튜브 [m] (건네는 중일 때)
+            "boarding": self.boarding.state if getattr(self, "boarding", None) else "CALM",
+            "hull_gap": self.boarding.gap if getattr(self, "boarding", None) else float("inf"),  # 어깨 ~ 선체 [m]
         })
         return obs
 
@@ -200,6 +221,8 @@ class MissionSim(TowSim):
         mc = self.cfg.mission
         if obs["tilt"] > CAPSIZE_ANGLE:
             self.outcome = Outcome(True, "capsized")
+        elif getattr(self, "climbed", False):
+            self.outcome = Outcome(True, "victim_climbed")
         elif self.tether.attached and obs["tether_broken"]:
             self.outcome = Outcome(True, "tether_broken")
         elif self.tether.attached and obs["human_home_dist"] < mc.home_radius:

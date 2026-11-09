@@ -5,7 +5,8 @@
   TRANSIT    멀리서: GPS로 좌표까지 이동 (정확도 수 m)
   SEARCH     좌표에 왔는데 아직 못 찾음 → 사각 나선으로 돌며 탐색
   APPROACH   가까이서: 열화상·소나로 직접 감지한 위치로 마무리 접근 (사람 앞에 멈출 거리까지)
-  HANDOFF    제자리에 서서 뱃머리 앞으로 튜브를 내밂 → 사람이 잡아서 끼울 때까지 기다림
+  HANDOFF    사람과 거리를 지키며 줄에 매단 튜브를 띄워 보냄 → 사람이 잡아서 끼울 때까지 기다림
+             (튜브 없는 사람에게 배가 가까이 가면 배를 붙잡고 올라타려 함 → 다가가지 않음)
              (못 잡으면 조금씩 다가감, 너무 오래 걸리면 추정이 틀린 것으로 보고 다시 탐색)
   TOW        튜브 착용 = 줄 연결 완료 → 기지로 끌고 옴
   DONE       끝
@@ -189,9 +190,8 @@ class MissionController:
         return True
 
     def on_grabbed(self, t: float):
-        """사람이 튜브를 잡음 → 끼우는 동안 줄이 당겨지지 않게 가장 가까운 거리로 붙음."""
+        """사람이 튜브를 잡음 → 끼울 때까지 그 자리에서 기다림 (다가가지 않음)."""
         self.grabbed_t = t
-        self.standoff = self.cfg.handoff_min_standoff
 
     def on_attached(self, t: float):
         self.phase, self.attach_t = TOW, t
@@ -262,16 +262,11 @@ class MissionController:
                     self.phase, self.handoff_t = HANDOFF, t
                 return Command(v, hdg)
 
-            # HANDOFF: 제자리에서 튜브를 내밀고 기다림
-            if self.grabbed_t is None:
-                waited = t - self.handoff_t
-                if waited > c.handoff_timeout:          # 한참 못 잡음 → 추정이 틀린 것 → 다시 탐색
-                    self.tracker.drop()
-                    self.handoff_t = None
-                    return Command(0.0, yaw, hold=True)
-                if waited > 4.0:                        # 손이 안 닿는 듯 → 조금씩 다가감
-                    self.standoff = max(c.handoff_min_standoff,
-                                        c.handoff_standoff - c.handoff_creep * (waited - 4.0))
+            # HANDOFF: 거리를 지키며 튜브를 띄워 보내고 기다림 (가까워지면 뒤로 물러남)
+            if self.grabbed_t is None and t - self.handoff_t > c.handoff_timeout:
+                self.tracker.drop()                     # 한참 못 잡음 → 추정이 틀린 것 → 다시 탐색
+                self.handoff_t = None
+                return Command(0.0, yaw, hold=True)
             v = float(np.clip(0.6 * (r - self.standoff), -0.2, 0.3))
             return Command(v, hdg, offer=True)
 

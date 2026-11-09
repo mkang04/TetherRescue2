@@ -63,6 +63,12 @@ human:                   # 익수자: 머리 + 몸통 두 덩어리, 등을 대�
   grab_reaction: 0.8     # 튜브가 손 닿는 곳에 이만큼 있어야 잡으려고 함 [s]
   grab_time: 1.2         # 팔을 뻗어 잡는 시간 [s]
   don_time: 3.0          # 튜브를 겨드랑이 아래에 끼우는 시간 [s] (끝나면 줄 연결)
+  # 로봇에 매달리기: 튜브가 없는 사람은 가까이 온 배를 붙잡고 올라타려 함 → 구조 실패
+  grab_zone: 1.5         # 어깨 ~ 선체 거리가 이 안이면 배를 향해 달려듦 [m]
+  climb_reaction: 1.0    # 위험 거리 안에 이만큼 있으면 달려들기 시작 [s]
+  lunge_force: 60.0      # 배를 향해 헤엄치는 힘 [N] (가정값)
+  climb_force_ratio: 0.4 # 매달릴 때 뱃전을 누르는 힘 = 체중의 이 비율 (가정값)
+  climb_fail_time: 3.0   # 이만큼 매달려 있으면 구조 실패 [s]
 
 tether:                  # 줄
   rest_length: 3.0       # 자연 길이 [m]
@@ -100,10 +106,12 @@ mission:
   search_speed: 0.9        # 탐색 속도 [m/s] (느릴수록 센서가 잘 봄)
   search_timeout: 90.0     # 이 시간 동안 못 찾으면 실패 [s]
   approach_speed_max: 1.0  # 마무리 접근 최대 속도 [m/s]
-  handoff_standoff: 1.6    # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m] (뱃머리 앞에 튜브를 내밂)
-  handoff_min_standoff: 1.15  # 사람이 못 잡으면 이 거리까지 조금씩 다가감 [m]
-  handoff_creep: 0.05      # 다가가는 빠르기 [m/s]
-  handoff_timeout: 15.0    # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s] (다가가기 끝 + 여유)
+  handoff_standoff: 3.0    # 튜브 건넬 때 로봇 중심 ~ 사람(추정) 거리 [m] (다가가지 않고 이 거리 유지)
+  tube_line_start: 0.9     # 처음 내밀 때 뱃머리 ~ 튜브 중심 거리 [m]
+  tube_line_max: 2.6       # 줄을 이만큼까지 풀어 튜브를 사람 쪽으로 보냄 [m]
+  tube_payout_speed: 0.12  # 줄 푸는 빠르기 [m/s]
+  tube_payout_delay: 2.0   # 내민 뒤 이만큼 기다렸다가 줄을 풀기 시작 [s]
+  handoff_timeout: 20.0    # 이 시간 동안 못 잡으면 추정이 틀린 것으로 보고 다시 탐색 [s] (줄 다 풀기 + 여유)
   capture_speed: 0.6       # 로봇이 이 속도보다 느릴 때만 사람이 튜브를 잡음 [m/s]
   track_lost_time: 8.0     # 이 시간 동안 감지가 없으면 '놓침' → 다시 탐색 [s]
   home_radius: 5.0         # 사람이 기지에서 이 거리 안에 오면 구조 완료 [m]

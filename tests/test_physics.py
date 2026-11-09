@@ -286,3 +286,60 @@ def test_tether_attached_beyond_rest_length_reels_in_without_snapping():
         s = t.compute(z, near, z, z, 0.004)
     assert t.rest == pytest.approx(cfg.rest_length)        # 다 감으면 원래 자연 길이
     assert s.tension == pytest.approx(cfg.stiffness * 0.2) and not s.broken
+
+
+def _robot_facing_shoulder(sim, bow_gap: float):
+    """로봇을 사람 어깨를 바라보게, 뱃머리 ~ 어깨가 bow_gap 이 되도록 옮김."""
+    d = sim.data
+    sh = d.xpos[sim.torso_id] + d.xmat[sim.torso_id].reshape(3, 3) @ sim.handoff.puppet.shape.shoulder[+1]
+    away = np.array([1.0, 0.0])
+    pos = sh[:2] + away * (sim.cfg.robot.length / 2 + bow_gap)
+    yaw = math.atan2(-away[1], -away[0])
+    adr = sim.model.jnt_qposadr[mujoco.mj_name2id(sim.model, mujoco.mjtObj.mjOBJ_JOINT, "robot_free")]
+    sim.data.qpos[adr:adr + 2] = pos
+    sim.data.qpos[adr + 3:adr + 7] = [math.cos(yaw / 2), 0, 0, math.sin(yaw / 2)]
+    sim.data.qvel[:] = 0
+    mujoco.mj_forward(sim.model, sim.data)
+
+
+def test_victim_without_tube_clings_to_close_robot():
+    """튜브 없는 사람에게 배가 위험 거리(1.5 m) 안에 있으면 달려들어 매달림 → 실패(매달림 또는 뒤집힘)"""
+    from tether_rescue.mission.boarding import CALM, CLINGING
+    from tether_rescue.mission.mission_sim import MissionSim
+
+    sim = MissionSim(flat_cfg(), mode="mission")
+    sim.reset(0)
+    _robot_facing_shoulder(sim, 1.0)
+    b = sim.boarding
+    assert b.measure()[0] < sim.cfg.human.grab_zone
+    dt = 1.0 / sim.cfg.sim.control_hz
+    seen, failed = set(), False
+    for _ in range(int(12.0 / dt)):
+        failed = failed or b.update(dt, has_tube=False) == "failed"
+        seen.add(b.state)
+        sim.step(0.0, 0.0)
+        if failed or sim.done:
+            break
+    assert CLINGING in seen
+    assert failed or sim.outcome.reason == "capsized"
+    # 멀리 있으면 아무 일도 없음
+    sim.reset(0)
+    _robot_facing_shoulder(sim, 2.2)
+    for _ in range(int(3.0 / dt)):
+        sim.boarding.update(dt, has_tube=False)
+        sim.step(0.0, 0.0)
+    assert sim.boarding.state == CALM
+
+
+def test_victim_holding_tube_does_not_lunge_at_robot():
+    from tether_rescue.mission.boarding import CALM
+    from tether_rescue.mission.mission_sim import MissionSim
+
+    sim = MissionSim(flat_cfg(), mode="mission")
+    sim.reset(0)
+    _robot_facing_shoulder(sim, 1.0)
+    dt = 1.0 / sim.cfg.sim.control_hz
+    for _ in range(int(3.0 / dt)):
+        sim.boarding.update(dt, has_tube=True)
+        sim.step(0.0, 0.0)
+    assert sim.boarding.state == CALM

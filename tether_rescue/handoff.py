@@ -2,7 +2,8 @@
 
 단계 (state)
   DECK      갑판 위에 실려 있음
-  OFFERED   로봇이 뱃머리 앞 물 위에 튜브를 내밀고 있음 (줄 힘 없음)
+  OFFERED   로봇이 뱃머리 앞 물 위에 튜브를 줄에 매달아 띄움 (줄 힘 없음).
+            배는 거리를 지키고, 줄을 조금씩 풀어 튜브를 사람 쪽으로 보냄
   GRABBING  튜브가 손 닿는 곳에 있어서 사람이 팔을 뻗는 중
   DONNING   사람이 잡은 튜브를 가슴으로 끌어와 끼우는 중
   WORN      끼움 완료 → 줄 연결 (견인 가능)
@@ -88,11 +89,20 @@ class TubeHandoff:
         self.reach_dist = float("nan")      # 가까운 어깨 ~ 튜브 거리 [m] (화면 표시용)
         self.p_grab = np.zeros(3)           # 잡은 순간 튜브 위치·자세 (몸통 좌표)
         self.q_grab = np.array([1.0, 0.0, 0.0, 0.0])
+        self.line = self.sim.cfg.mission.tube_line_start   # 뱃머리 ~ 튜브 중심 거리 (풀린 줄) [m]
+        self.t_offer = 0.0
 
     # ---------------------------------------------------------------- 명령 (MissionSim이 부름)
     def offer(self):
         if self.state == DECK:
+            self.line = self.sim.cfg.mission.tube_line_start
+            self.t_offer = self.sim.time
             self._go(OFFERED)
+
+    @property
+    def has_tube(self) -> bool:
+        """사람이 튜브를 잡았는가 (잡는 중 포함)"""
+        return self.state in (GRABBING, DONNING, WORN)
 
     def retract(self):
         """사람이 아직 안 잡았으면 튜브를 다시 갑판으로."""
@@ -109,7 +119,7 @@ class TubeHandoff:
         return d.xpos[b].copy(), d.xmat[b].reshape(3, 3).copy(), d.xquat[b].copy()
 
     def offered_pose(self) -> tuple[np.ndarray, np.ndarray]:
-        """로봇 뱃머리 앞, 물 위에 평평하게 떠 있는 튜브 (월드 위치, 쿼터니언)."""
+        """로봇 뱃머리 앞 line 거리, 물 위에 평평하게 떠 있는 튜브 (월드 위치, 쿼터니언)."""
         sim, d = self.sim, self.sim.data
         rb = sim.robot_id
         R = d.xmat[rb].reshape(3, 3)
@@ -117,7 +127,7 @@ class TubeHandoff:
         fwd = R[:, 0].copy()
         fwd[2] = 0.0
         fwd /= max(np.linalg.norm(fwd), 1e-9)
-        c = d.xpos[rb].copy() + fwd * (bow + TUBE_MAJOR + TUBE_MINOR + BOW_GAP)
+        c = d.xpos[rb].copy() + fwd * (bow + max(self.line, TUBE_MAJOR + TUBE_MINOR + BOW_GAP))
         c[2] = float(sim.waves.height(c[0], c[1], d.time))
         yaw = math.atan2(fwd[1], fwd[0])
         return c, np.array([math.cos(yaw / 2), 0.0, 0.0, math.sin(yaw / 2)])
@@ -144,6 +154,8 @@ class TubeHandoff:
         """반환: "grabbed"(사람이 튜브를 잡음) / "worn"(끼움 완료 → 줄 연결) / None"""
         h, mc = self.sim.cfg.human, self.sim.cfg.mission
         t = self.sim.time
+        if self.state == OFFERED and t - self.t_offer >= mc.tube_payout_delay:
+            self.line = min(mc.tube_line_max, self.line + mc.tube_payout_speed * dt)   # 줄을 풀어 튜브를 보냄
         if self.state in (OFFERED, GRABBING):
             c, q = self.offered_pose()
             dist, side = self._reach(c, q)
